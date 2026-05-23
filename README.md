@@ -144,8 +144,10 @@ franklin-trading run btc-funding-basis --mode live       # real on-chain orders
    Economic substrate (inherited): USDC wallet on Base + Solana, x402 micropayments
 ```
 
-See [`PHILOSOPHY.md`](PHILOSOPHY.md) for the design principles and
-[`docs/adr/`](docs/adr/) for individual architecture decisions.
+See [`PHILOSOPHY.md`](PHILOSOPHY.md) for the design principles,
+[`docs/CONVICTIONS.md`](docs/CONVICTIONS.md) for the 12 design stances
+formed from analyzing 60+ open issues across the four reference projects,
+and [`docs/adr/`](docs/adr/) for individual architecture decisions.
 
 ## Roadmap
 
