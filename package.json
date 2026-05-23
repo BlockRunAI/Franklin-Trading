@@ -1,0 +1,101 @@
+{
+  "name": "@blockrun/franklin-trading",
+  "version": "0.1.0",
+  "description": "Franklin Trading — The AI trading agent with a wallet. Researches, backtests, paper-trades and live-trades autonomously, paying per call in USDC. Crypto-first. Apache-2.0.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./plugin-sdk": {
+      "types": "./dist/plugin-sdk/index.d.ts",
+      "default": "./dist/plugin-sdk/index.js"
+    },
+    "./wallet": {
+      "types": "./dist/wallet/index.d.ts",
+      "default": "./dist/wallet/index.js"
+    },
+    "./strategy": {
+      "types": "./dist/strategies/index.d.ts",
+      "default": "./dist/strategies/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "franklin-trading": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE",
+    "PHILOSOPHY.md"
+  ],
+  "scripts": {
+    "build": "tsc && node scripts/copy-plugin-assets.mjs",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test --test-reporter=spec test/local.mjs test/skills.local.mjs",
+    "test:e2e": "npm run build && node --test --test-reporter=spec test/e2e.mjs",
+    "test:strategies": "npm run build && node --test --test-reporter=spec test/strategies.mjs",
+    "test:free-models": "npm run build && node --test --test-reporter=spec test/free-model-matrix.mjs",
+    "test:all": "npm run test && npm run test:strategies && npm run test:e2e",
+    "test:watch": "node --test --watch test/local.mjs test/skills.local.mjs"
+  },
+  "keywords": [
+    "franklin",
+    "franklin-trading",
+    "ai-trading-agent",
+    "autonomous-economic-agent",
+    "wallet-native",
+    "agent-with-wallet",
+    "x402",
+    "usdc",
+    "pay-per-action",
+    "multi-model",
+    "backtest",
+    "paper-trading",
+    "live-trading",
+    "hyperliquid",
+    "jupiter",
+    "0x",
+    "polymarket",
+    "crypto-trading",
+    "blockrun"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BlockRunAI/Franklin-Trading.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BlockRunAI/Franklin-Trading/issues"
+  },
+  "homepage": "https://trading.franklin.run",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@blockrun/llm": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "@types/react": "^19.2.14",
+    "bs58": "^6.0.0",
+    "chalk": "^5.4.0",
+    "commander": "^13.0.0",
+    "ink": "^6.8.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.4",
+    "sharp": "^0.34.5",
+    "viem": "^2.48.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.7.0"
+  }
+}

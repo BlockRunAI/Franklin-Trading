@@ -1,0 +1,28 @@
+.DS_Store
+node_modules
+*.tsbuildinfo
+.env
+.env.*
+*.log
+.gstack/
+
+# Alternate package-manager lockfiles — npm is the source of truth.
+# pnpm/yarn lockfiles drift silently because CI only runs `npm ci`.
+pnpm-lock.yaml
+yarn.lock
+
+# Build output (rebuilt from src on every install)
+dist/
+
+# Local CLI agent settings (user-specific allowlists, not portable)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Playwright MCP scratch snapshots
+.playwright-mcp/
+
+# Stale space-named subdirectory ("Franklin-Trading/ /") left over from a
+# prior partial-fork attempt before this repo's M0 work. Inspect manually
+# before deleting — may contain in-progress work from before the fork.
+/\ /
+
