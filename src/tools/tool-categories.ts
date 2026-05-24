@@ -70,6 +70,15 @@ export const CORE_TOOL_NAMES: ReadonlySet<string> = new Set([
   // balance + chain + address must be a one-call answer rather than a
   // Bash shell-out.
   'Wallet',
+  // Crypto market data — fear/greed, token rankings, ETF flows, options,
+  // liquidations, technical & on-chain indicators. The "what's the crypto
+  // mood / which coins are pumping / BTC's RSI" category. Core so the
+  // agent reaches for it on natural crypto questions instead of falling
+  // back to TradingMarket prices + guessing the Fear & Greed index.
+  // SurfChain / SurfSocial stay activation-gated (lower-frequency,
+  // long-tail surface — the sentiment-analyst persona will ActivateTool
+  // SurfSocial itself).
+  'SurfMarket',
 ]);
 
 /** True if this tool is always available without activation. */

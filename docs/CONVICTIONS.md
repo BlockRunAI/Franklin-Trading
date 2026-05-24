@@ -199,7 +199,7 @@ asserts the bot stops cleanly, then recovers cleanly.
 - TradingAgents [#832](https://github.com/TauricResearch/TradingAgents/issues/832) — India support requested, unanswered.
 - TradingAgents [#861](https://github.com/TauricResearch/TradingAgents/issues/861) — Tushare / AKShare A-share data requested, unanswered.
 - TradingAgents [#628](https://github.com/TauricResearch/TradingAgents/issues/628) — hardcoded SPY benchmark breaks alpha for non-US tickers (mixes single-stock INR with USD index).
-- AI-Trader [#169](https://github.com/HKUDS/AI-Trader/issues/169) — "什么时候支持A股?" (when will A-shares be supported?) — silenced.
+- AI-Trader [#169](https://github.com/HKUDS/AI-Trader/issues/169) — user asking (in Mandarin) when A-shares will be supported — silenced.
 - Vibe-Trading [#62](https://github.com/HKUDS/Vibe-Trading/issues/62) — Tushare integration **lacks fundamentals** (income statements, balance sheets, cashflow); pre-filter strategies impossible.
 
 HKUDS is a *Hong Kong* lab and still under-serves Asia. TradingAgents

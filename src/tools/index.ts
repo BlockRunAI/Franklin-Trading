@@ -42,6 +42,7 @@ import {
 } from './defillama.js';
 import { predictionMarketCapability } from './prediction.js';
 import { blockrunCapability } from './blockrun.js';
+import { surfCapabilities } from './surf.js';
 import { createTradingCapabilities } from './trading-execute.js';
 import { Portfolio } from '../trading/portfolio.js';
 import { RiskEngine } from '../trading/risk.js';
@@ -140,8 +141,9 @@ export const allCapabilities: CapabilityHandler[] = [
   defiLlamaYieldsCapability,
   defiLlamaPriceCapability,
   predictionMarketCapability, // Polymarket / Kalshi / matching / smart money via Predexon
-  // ─── Generic x402-paid gateway primitive ─────────────────────────────
-  blockrunCapability,
+  // ─── Generic x402-paid gateway primitive + typed Surf surface ────────
+  blockrunCapability,            // Long-tail Surf paths + future partners
+  ...surfCapabilities,           // SurfMarket / SurfChain / SurfSocial — endpoint-enum function tools (no path guessing, auto x402)
   // ─── Misc ────────────────────────────────────────────────────────────
   moaCapability,
   webhookPostCapability,

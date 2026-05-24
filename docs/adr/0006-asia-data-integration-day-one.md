@@ -26,7 +26,7 @@ project under-serves it, despite consistent user demand:
 - **TradingAgents [#832](https://github.com/TauricResearch/TradingAgents/issues/832)** — "Non US stocks" / Indian market request, unanswered.
 - **TradingAgents [#861](https://github.com/TauricResearch/TradingAgents/issues/861)** — "how can i use tushare or akshare" — unanswered.
 - **TradingAgents [#628](https://github.com/TauricResearch/TradingAgents/issues/628)** — benchmark hardcoded to SPY breaks alpha for non-US tickers (a single-stock INR return is meaninglessly compared against a USD index).
-- **AI-Trader [#169](https://github.com/HKUDS/AI-Trader/issues/169)** — "什么时候支持A股?" (when will A-shares be supported?) — silenced.
+- **AI-Trader [#169](https://github.com/HKUDS/AI-Trader/issues/169)** — user asking (in Mandarin) when A-shares will be supported — silenced.
 - **Vibe-Trading [#62](https://github.com/HKUDS/Vibe-Trading/issues/62)** — has Tushare integration but **fundamental data is insufficient for pre-filter strategies**. Users have built around Vibe-Trading using their own data, not within it.
 
 HKUDS — a *Hong Kong* lab — still under-serves Asia, in part because
