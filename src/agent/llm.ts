@@ -289,6 +289,7 @@ export function modelHasExtendedThinking(model: string): boolean {
   const m = model.toLowerCase();
   // Excluded: Opus 4.7+ uses adaptive thinking; sending `thinking: enabled`
   // causes the API to 400.
+  if (m.includes('opus-4.8') || m.includes('opus-4-8')) return false;
   if (m.includes('opus-4.7') || m.includes('opus-4-7')) return false;
   return (
     m.includes('opus-4.6') || m.includes('opus-4-6') ||

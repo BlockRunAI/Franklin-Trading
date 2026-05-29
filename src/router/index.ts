@@ -79,14 +79,16 @@ const AUTO_TIERS: Record<Tier, { primary: string; fallback: string[] }> = {
     // Hard tasks — multi-file refactors, ambiguous specs, dense reasoning
     // chains — still go to Opus. V4 Pro is great but not a Sonnet/Opus
     // replacement at the high end of difficulty per recent agent-bench runs.
-    primary: 'anthropic/claude-opus-4.7',
-    fallback: ['openai/gpt-5.5', 'anthropic/claude-sonnet-4.6', 'deepseek/deepseek-v4-pro'],
+    primary: 'anthropic/claude-opus-4.8',
+    fallback: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5', 'anthropic/claude-sonnet-4.6', 'deepseek/deepseek-v4-pro'],
   },
   REASONING: {
-    // Opus 4.7: step-change improvement in agentic coding over 4.6 per
-    // Anthropic. 4.6 stays in the fallback chain in case of rollout delays.
-    primary: 'anthropic/claude-opus-4.7',
+    // Opus 4.8: current Anthropic flagship — strongest agentic coding +
+    // reasoning. 4.7 then 4.6 stay in the fallback chain in case of rollout
+    // delays at the gateway edge.
+    primary: 'anthropic/claude-opus-4.8',
     fallback: [
+      'anthropic/claude-opus-4.7',
       'anthropic/claude-opus-4.6',
       'openai/o3',
       'deepseek/deepseek-v4-pro',

@@ -211,10 +211,11 @@ export function estimateHistoryTokens(history: Dialogue[]): number {
  */
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic. The BlockRun gateway model entry advertises 1M context for
-  // Opus 4.7, but the 1M beta header may not be enabled at the gateway
+  // Opus 4.8 / 4.7, but the 1M beta header may not be enabled at the gateway
   // edge yet — sending more than 200k without it 413s. Keep 200k as the
   // safe Franklin baseline; bump to 1_000_000 in a separate commit once
   // a real >200k call has been verified end-to-end.
+  'anthropic/claude-opus-4.8': 200_000,
   'anthropic/claude-opus-4.7': 200_000,
   'anthropic/claude-opus-4.6': 200_000,
   'anthropic/claude-sonnet-4.6': 200_000,
