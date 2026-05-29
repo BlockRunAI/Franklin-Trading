@@ -149,6 +149,20 @@ See [`PHILOSOPHY.md`](PHILOSOPHY.md) for the design principles,
 formed from analyzing 60+ open issues across the four reference projects,
 and [`docs/adr/`](docs/adr/) for individual architecture decisions.
 
+### Base MCP — onchain actions
+
+Franklin connects to the official **[Base MCP](https://docs.base.org/ai-agents)** server
+(`https://mcp.base.org`) for onchain Base actions — balances, transactions, swaps, and
+x402 payments — authorized via your Base Account (OAuth, per-write approval). One command:
+
+```bash
+franklin mcp add base      # browser login, then `franklin start` — tools as mcp__base__*
+```
+
+The HTTP+OAuth transport is generic: `franklin mcp add <name> --url <url>` connects any
+hosted MCP server that supports Dynamic Client Registration + PKCE. See
+[`docs/base-mcp.md`](docs/base-mcp.md).
+
 ## Roadmap
 
 | Status | Milestone |
