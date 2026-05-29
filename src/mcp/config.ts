@@ -34,6 +34,37 @@ const BUILTIN_MCP_SERVERS: Record<string, McpServerConfig> = {
   },
 };
 
+/**
+ * Catalog of blessed hosted (HTTP) MCP servers Franklin knows how to set up.
+ *
+ * Unlike BUILTIN_MCP_SERVERS (gated by `isCommandAvailable`, which is
+ * meaningless for a URL), these are opt-in: `franklin mcp add <name>` writes the
+ * entry to ~/.blockrun/mcp.json and runs the OAuth login. `/mcp` and `doctor`
+ * advertise catalog entries that aren't configured yet so users can discover
+ * them. Pure data — no network, unit-testable.
+ */
+export interface KnownHttpServer {
+  name: string;
+  url: string;
+  label: string;
+  description: string;
+  docs: string;
+  requiresOAuth: boolean;
+}
+
+export const KNOWN_HTTP_SERVERS: Record<string, KnownHttpServer> = {
+  base: {
+    name: 'base',
+    url: 'https://mcp.base.org',
+    label: 'Base MCP',
+    description:
+      'Onchain Base actions — view address/balances/activity, prepare & sign transactions, ' +
+      'swaps, batched calls, and x402 payments. Authorizes via your Base Account (OAuth).',
+    docs: 'https://docs.base.org/ai-agents',
+    requiresOAuth: true,
+  },
+};
+
 function isCommandAvailable(cmd: string): boolean {
   try {
     execSync(`which ${cmd}`, { stdio: 'pipe' });
@@ -99,6 +130,25 @@ export function loadMcpConfig(workDir: string): McpConfig {
   // the user provides the credentials.
   for (const [name, config] of Object.entries(servers)) {
     if (config.disabled) continue;
+
+    // http servers authenticate via OAuth (tokens are stored separately under
+    // ~/.blockrun/mcp-auth/<name>.json), so the env-file credential check below
+    // doesn't apply to them. Gate them on a stored access token instead: no
+    // token → disable, so the server is silently skipped at `franklin start`
+    // (it never pops a browser or hangs the boot). A present-but-expired token
+    // still has access_token set → stays enabled → the SDK refreshes it via the
+    // refresh_token when connecting. Authorize via `franklin mcp login <name>`.
+    if (config.transport === 'http') {
+      const authFile = path.join(BLOCKRUN_DIR, 'mcp-auth', `${name}.json`);
+      let hasToken = false;
+      try {
+        const stored = JSON.parse(fs.readFileSync(authFile, 'utf-8'));
+        hasToken = !!stored?.tokens?.access_token;
+      } catch { /* no/corrupt token file → treat as unauthorized */ }
+      if (!hasToken) (servers[name] as McpServerConfig).disabled = true;
+      continue; // skip the stdio env-file checks below
+    }
+
     const env = (config.env || {}) as Record<string, string>;
     const args = (config.args || []) as string[];
     const configStr = JSON.stringify(config).toLowerCase();

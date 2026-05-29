@@ -6,6 +6,9 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { CapabilityHandler, CapabilityResult, ExecutionScope } from '../agent/types.js';
 import { logger } from '../logger.js';
 
@@ -37,7 +40,9 @@ export interface McpConfig {
 interface ConnectedServer {
   name: string;
   client: Client;
-  transport: StdioClientTransport;
+  transport: Transport;
+  /** Which transport this server connected over — surfaced by listMcpServers. */
+  transportKind: 'stdio' | 'http';
   tools: CapabilityHandler[];
 }
 
@@ -116,6 +121,55 @@ async function connectStdio(
     throw err;
   }
 
+  const capabilities = await buildCapabilities(name, client);
+  const connected: ConnectedServer = { name, client, transport, transportKind: 'stdio', tools: capabilities };
+  connections.set(name, connected);
+  return connected;
+}
+
+/**
+ * Connect to an MCP server via Streamable HTTP transport (hosted servers).
+ * `authProvider` drives the OAuth handshake/refresh; at startup it is a
+ * non-interactive provider that throws rather than opening a browser, so a
+ * server reaching here is expected to already have a stored/refreshable token.
+ */
+async function connectHttp(
+  name: string,
+  config: McpServerConfig,
+  authProvider?: OAuthClientProvider,
+): Promise<ConnectedServer> {
+  if (!config.url) {
+    throw new Error(`MCP server "${name}" missing url`);
+  }
+
+  const transport = new StreamableHTTPClientTransport(new URL(config.url), {
+    authProvider,
+    requestInit: config.headers ? { headers: config.headers } : undefined,
+  });
+
+  const client = new Client(
+    { name: `franklin-mcp-${name}`, version: '1.0.0' },
+    { capabilities: {} }
+  );
+
+  try {
+    await client.connect(transport);
+  } catch (err) {
+    try { await transport.close(); } catch { /* ignore */ }
+    throw err;
+  }
+
+  const capabilities = await buildCapabilities(name, client);
+  const connected: ConnectedServer = { name, client, transport, transportKind: 'http', tools: capabilities };
+  connections.set(name, connected);
+  return connected;
+}
+
+/**
+ * Discover an already-connected server's tools + resources and wrap each as a
+ * CapabilityHandler. Transport-agnostic — shared by the stdio and http paths.
+ */
+async function buildCapabilities(name: string, client: Client): Promise<CapabilityHandler[]> {
   // Discover tools
   const { tools: mcpTools } = await client.listTools();
   const capabilities: CapabilityHandler[] = [];
@@ -201,9 +255,7 @@ async function connectStdio(
     // Server doesn't support resources — that's fine, tools-only mode
   }
 
-  const connected: ConnectedServer = { name, client, transport, tools: capabilities };
-  connections.set(name, connected);
-  return connected;
+  return capabilities;
 }
 
 /**
@@ -227,13 +279,18 @@ export async function connectMcpServers(
     try {
       logger.debug(`[franklin] Connecting to MCP server: ${name}...`);
 
-      if (serverConfig.transport !== 'stdio') {
-        logger.debug(`[franklin] MCP HTTP transport not yet supported for ${name}`);
-        continue;
-      }
-
       // Timeout: don't let a slow server block startup
-      const connectPromise = connectStdio(name, serverConfig);
+      let connectPromise: Promise<ConnectedServer>;
+      if (serverConfig.transport === 'http') {
+        // Lazy-load the OAuth machinery so stdio-only users never pull in the
+        // http/loopback code. interactive:false → never opens a browser here;
+        // a token-less http server is already auto-disabled in loadMcpConfig.
+        const { McpOAuthProvider } = await import('./oauth.js');
+        const provider = new McpOAuthProvider(name, serverConfig.url || '', { interactive: false });
+        connectPromise = connectHttp(name, serverConfig, provider);
+      } else {
+        connectPromise = connectStdio(name, serverConfig);
+      }
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('connection timeout (5s)')), MCP_CONNECT_TIMEOUT)
       );
@@ -275,11 +332,12 @@ export async function disconnectMcpServers(): Promise<void> {
 /**
  * List connected MCP servers and their tools.
  */
-export function listMcpServers(): Array<{ name: string; toolCount: number; tools: string[] }> {
-  const result: Array<{ name: string; toolCount: number; tools: string[] }> = [];
+export function listMcpServers(): Array<{ name: string; transport: 'stdio' | 'http'; toolCount: number; tools: string[] }> {
+  const result: Array<{ name: string; transport: 'stdio' | 'http'; toolCount: number; tools: string[] }> = [];
   for (const [name, conn] of connections) {
     result.push({
       name,
+      transport: conn.transportKind,
       toolCount: conn.tools.length,
       tools: conn.tools.map(t => t.spec.name),
     });

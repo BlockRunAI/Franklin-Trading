@@ -230,6 +230,32 @@ async function runChecks(): Promise<Check[]> {
     });
   }
 
+  // ── 7b. Hosted (OAuth) MCP auth status ────────────────────────────
+  // For any http server in mcp.json, report whether it's authorized (a token
+  // file exists). Filesystem-only — no network.
+  if (fs.existsSync(mcpPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(mcpPath, 'utf-8')) as {
+        mcpServers?: Record<string, { transport?: string; label?: string }>;
+      };
+      for (const [name, s] of Object.entries(parsed.mcpServers || {})) {
+        if (s?.transport !== 'http') continue;
+        const authFile = path.join(BLOCKRUN_DIR, 'mcp-auth', `${name}.json`);
+        let authorized = false;
+        try {
+          const stored = JSON.parse(fs.readFileSync(authFile, 'utf-8'));
+          authorized = !!stored?.tokens?.access_token;
+        } catch { /* no token */ }
+        out.push({
+          name: `MCP ${s.label || name}`,
+          status: authorized ? 'ok' : 'warn',
+          detail: authorized ? 'authorized' : 'not logged in',
+          remedy: authorized ? undefined : `franklin mcp login ${name}`,
+        });
+      }
+    } catch { /* invalid JSON already reported above */ }
+  }
+
   // ── 8. Telemetry ──────────────────────────────────────────────────
   const telEnabled = isTelemetryEnabled();
   if (telEnabled) {

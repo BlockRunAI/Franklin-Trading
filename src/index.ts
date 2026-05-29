@@ -234,6 +234,16 @@ program
   });
 
 program
+  .command('mcp <action> [name]')
+  .description('Manage MCP servers (list | add <name> | login <name> | remove <name>)')
+  .option('--url <url>', 'Server URL for a non-catalog server (with add/login)')
+  .option('--no-browser', 'Print the authorization URL instead of opening a browser')
+  .action(async (action: string, name: string | undefined, opts: { url?: string; browser?: boolean }) => {
+    const { mcpCommand } = await import('./commands/mcp.js');
+    await mcpCommand(action, name, opts);
+  });
+
+program
   .command('plugins')
   .description('List installed plugins')
   .action(async () => {

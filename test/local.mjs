@@ -8420,3 +8420,107 @@ test('journal-display: renderDisciplineFooter flags components below 3.0', async
 // [pruned: dead test block(s) referenced removed module — see git log for original]
 
 // [pruned: dead test block(s) referenced removed module — see git log for original]
+
+
+// ─── Base MCP / hosted HTTP + OAuth integration ─────────────────────────────
+
+test('mcp catalog: KNOWN_HTTP_SERVERS.base points at mcp.base.org over OAuth', async () => {
+  const { KNOWN_HTTP_SERVERS } = await import('../dist/mcp/config.js');
+  const base = KNOWN_HTTP_SERVERS.base;
+  assert.ok(base, 'base catalog entry exists');
+  assert.equal(base.url, 'https://mcp.base.org');
+  assert.equal(base.requiresOAuth, true);
+  assert.ok(base.label && base.docs, 'has label + docs link');
+});
+
+test('McpOAuthProvider: storage round-trip, 0600 perms, non-interactive redirect throws', async () => {
+  const { McpOAuthProvider, hasStoredToken, authFilePath } = await import('../dist/mcp/oauth.js');
+  const { statSync } = await import('node:fs');
+  const name = `__test_oauth_${process.pid}`;
+  const file = authFilePath(name);
+  try {
+    const p = new McpOAuthProvider(name, 'https://example.test', { interactive: false });
+    assert.equal(hasStoredToken(name), false, 'no token initially');
+    assert.equal(p.tokens(), undefined);
+
+    p.saveClientInformation({ client_id: 'cid-123', redirect_uris: ['http://127.0.0.1:8404/callback'] });
+    p.saveCodeVerifier('verifier-abc');
+    assert.equal(p.codeVerifier(), 'verifier-abc');
+    assert.equal(p.clientInformation()?.client_id, 'cid-123');
+
+    p.saveTokens({ access_token: 'tok-1', token_type: 'bearer', refresh_token: 'r-1' });
+    assert.equal(hasStoredToken(name), true, 'token present after saveTokens');
+    assert.equal(p.tokens()?.access_token, 'tok-1');
+    // saveTokens clears the single-use PKCE verifier
+    assert.throws(() => p.codeVerifier(), /code verifier/);
+
+    const mode = statSync(file).mode & 0o777;
+    assert.equal(mode, 0o600, `expected 0600, got ${mode.toString(8)}`);
+
+    // non-interactive must NEVER open a browser — it throws instead
+    assert.throws(
+      () => p.redirectToAuthorization(new URL('https://example.test/authorize')),
+      /franklin mcp login/,
+    );
+
+    p.invalidateCredentials('all');
+    assert.equal(hasStoredToken(name), false, 'cleared after invalidate(all)');
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test('McpOAuthProvider loopback: captures ?code from the redirect', async () => {
+  const { McpOAuthProvider } = await import('../dist/mcp/oauth.js');
+  const http = await import('node:http');
+  const name = `__test_loopback_${process.pid}`;
+  const p = new McpOAuthProvider(name, 'https://example.test', { interactive: true });
+  await p.startLoopback();
+  try {
+    const port = new URL(p.redirectUrl).port;
+    const state = p.state();
+    const waiter = p.waitForCallback();
+    await new Promise((resolve, reject) => {
+      http.get(`http://127.0.0.1:${port}/callback?code=the-code&state=${state}`, (res) => {
+        res.resume();
+        res.on('end', resolve);
+      }).on('error', reject);
+    });
+    const result = await waiter;
+    assert.equal(result.code, 'the-code');
+    assert.equal(result.state, state);
+  } finally {
+    p.stopLoopback();
+  }
+});
+
+test('loadMcpConfig: http server auto-disabled without token, enabled with token', async () => {
+  const { loadMcpConfig, trustProjectDir } = await import('../dist/mcp/config.js');
+  const { McpOAuthProvider, authFilePath } = await import('../dist/mcp/oauth.js');
+  const srv = `__test_http_gate_${process.pid}`;
+  const workDir = mkdtempSync(join(tmpdir(), 'fr-mcp-gate-'));
+  const trustFile = join(homedir(), '.blockrun', 'trusted-projects.json');
+  let trustBackup = null;
+  try {
+    writeFileSync(join(workDir, '.mcp.json'), JSON.stringify({
+      mcpServers: { [srv]: { transport: 'http', url: 'https://example.test', label: 'Test' } },
+    }));
+    if (existsSync(trustFile)) trustBackup = readFileSync(trustFile, 'utf-8');
+    trustProjectDir(workDir);
+
+    // no token → disabled (silently skipped at startup, no browser pop)
+    let cfg = loadMcpConfig(workDir);
+    assert.equal(cfg.mcpServers[srv]?.disabled, true, 'http server disabled without token');
+
+    // token present → enabled (SDK will connect/refresh)
+    const p = new McpOAuthProvider(srv, 'https://example.test', { interactive: false });
+    p.saveTokens({ access_token: 'tok', token_type: 'bearer' });
+    cfg = loadMcpConfig(workDir);
+    assert.ok(!cfg.mcpServers[srv]?.disabled, 'http server enabled with token');
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+    rmSync(authFilePath(srv), { force: true });
+    if (trustBackup !== null) writeFileSync(trustFile, trustBackup);
+    else rmSync(trustFile, { force: true });
+  }
+});

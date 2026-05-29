@@ -339,17 +339,30 @@ const DIRECT_COMMANDS: Record<string, (ctx: CommandContext) => Promise<void> | v
   },
   '/mcp': async (ctx) => {
     const { listMcpServers } = await import('../mcp/client.js');
+    const { KNOWN_HTTP_SERVERS } = await import('../mcp/config.js');
+    const { hasStoredToken } = await import('../mcp/oauth.js');
     const servers = listMcpServers();
+    let text = '';
     if (servers.length === 0) {
-      ctx.onEvent({ kind: 'text_delta', text: 'No MCP servers connected.\nAdd servers to `~/.blockrun/mcp.json` or `.mcp.json` in your project.\n' });
+      text += 'No MCP servers connected.\nAdd servers to `~/.blockrun/mcp.json` or `.mcp.json` in your project.\n';
     } else {
-      let text = `**${servers.length} MCP server(s) connected:**\n\n`;
+      text += `**${servers.length} MCP server(s) connected:**\n\n`;
       for (const s of servers) {
-        text += `  **${s.name}** — ${s.toolCount} tools\n`;
+        text += `  **${s.name}** (${s.transport}) — ${s.toolCount} tools\n`;
         for (const t of s.tools) text += `    · ${t}\n`;
       }
-      ctx.onEvent({ kind: 'text_delta', text });
     }
+    // Advertise blessed hosted servers that aren't connected this session.
+    const connected = new Set(servers.map(s => s.name));
+    const hints: string[] = [];
+    for (const k of Object.values(KNOWN_HTTP_SERVERS)) {
+      if (connected.has(k.name)) continue;
+      hints.push(hasStoredToken(k.name)
+        ? `  ${k.label}: authorized — restart Franklin to load it (re-auth: \`franklin mcp login ${k.name}\`)`
+        : `  ${k.label}: available — \`franklin mcp add ${k.name}\``);
+    }
+    if (hints.length) text += `\n**Hosted MCP:**\n${hints.join('\n')}\n`;
+    ctx.onEvent({ kind: 'text_delta', text });
     emitDone(ctx);
   },
   '/context': async (ctx) => {
