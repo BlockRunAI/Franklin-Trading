@@ -12,8 +12,44 @@ giving the agent first-class onchain Base capabilities:
 Tools surface to the agent as `mcp__base__*`.
 
 > **Wallet note.** Base MCP uses **your Base Account**, authorized via OAuth in your
-> browser — it is *separate* from the private-key wallet Franklin uses for x402
-> micropayments. Every write action requires explicit approval in Base Account.
+> browser — it is a *different account* from the private-key wallet Franklin uses for
+> its own x402 micropayments (e.g. `get_wallets` returns a Base Account address like
+> `0xf0b7…`, not Franklin's `0xCC8c…` payment wallet).
+
+## Authorization & autonomy (read this)
+
+There are two separate things, don't conflate them:
+
+1. **Connection authorization** — the one-time browser OAuth you do in `franklin mcp add base`.
+   It is stored and auto-refreshed, so you authorize the *connection* once.
+2. **Per-spend authorization** — **every write** (`send`, `swap`, `sign`, `send_calls`)
+   and **every x402 payment** still requires a **fresh approval + wallet signature** in
+   your Base Account. Base MCP today exposes **only "approval mode"** — there is no
+   "approve a budget once, then spend autonomously" mode (Base docs: *"a single execution
+   mode for write tools: approval mode"*; x402: *"each paid request still requires approval
+   and a wallet signature"*).
+
+**Implication for Franklin's autonomy.** Franklin's *autonomous* spending (paying for LLM
+calls / APIs over x402) runs on **Franklin's own private-key wallet** — no per-call prompt.
+**Base MCP is not autonomous**: it is best used for **reads** (balances, portfolio, history)
+and **human-confirmed / larger onchain actions**. Do not route Franklin's high-frequency
+autonomous spend through Base MCP — keep that on Franklin's own wallet.
+
+## Using it in a session
+
+Once `franklin start` has the Base tools loaded (`/mcp` lists them), just talk to the agent
+in natural language — it auto-selects the matching `mcp__base__*` tool (Franklin activates
+MCP tools on demand, so the agent may `ActivateTool` first, then call it):
+
+- **Reads** return immediately, no approval:
+  - "show my Base wallets" → `mcp__base__get_wallets`
+  - "what's my Base portfolio / balances" → `mcp__base__get_portfolio`
+  - "show my recent Base transactions" → `mcp__base__get_transaction_history`
+- **Writes** return an **approval link + `requestId`** instead of executing:
+  - "send 5 USDC to 0x…" / "swap 10 USDC for ETH on Base" → `mcp__base__send` / `swap`
+  - Open the link, review and **sign in your Base Account**, then the agent confirms with
+    `mcp__base__get_request_status`.
+- **x402 payments**: `initiate_x402_request` → approve + sign → `complete_x402_request`.
 
 ## Setup (one command)
 
