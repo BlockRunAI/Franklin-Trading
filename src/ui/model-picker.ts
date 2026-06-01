@@ -94,7 +94,8 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   nemotron: 'nvidia/qwen3-coder-480b',
   devstral: 'nvidia/qwen3-coder-480b',
   // Others
-  minimax: 'minimax/minimax-m2.7',
+  minimax: 'minimax/minimax-m3',
+  'm3': 'minimax/minimax-m3',
   'm2.7': 'minimax/minimax-m2.7',
   glm: 'zai/glm-5.1',
   'glm-turbo': 'zai/glm-5-turbo',

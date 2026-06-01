@@ -77,6 +77,7 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; perC
   // through 2026-05-31 — list is $2.00/$4.00, promo is $0.50/$1.00.
   'deepseek/deepseek-v4-pro': { input: 0.50, output: 1.00 },
   // Minimax
+  'minimax/minimax-m3': { input: 0.3, output: 1.2 },
   'minimax/minimax-m2.7': { input: 0.3, output: 1.2 },
   'minimax/minimax-m2.5': { input: 0.3, output: 1.2 },
   // Moonshot

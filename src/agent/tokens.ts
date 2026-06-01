@@ -255,6 +255,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'zai/glm-5.1': 200_000,
   'moonshot/kimi-k2.6': 256_000,
   'moonshot/kimi-k2.5': 128_000,
+  'minimax/minimax-m3': 1_000_000,
   'minimax/minimax-m2.7': 128_000,
   // NVIDIA-hosted free tier (2026-04-29 V4 Flash + Omni launch)
   'nvidia/deepseek-v4-flash': 1_000_000,
