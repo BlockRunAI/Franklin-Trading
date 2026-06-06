@@ -3,6 +3,13 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 — 2026-06-06
+
+### Changed
+- **Catalog sync with the BlockRun gateway (2026-06-04/05 drops).** `xai/grok-4.3` ($1.50/$4.00, 1M ctx, reasoning + vision) and `xai/grok-build-0.1` ($1.50/$3.00, 256K, agentic coding) added to pricing; bare `grok` shortcut promoted grok-3 → grok-4.3; picker's Premium row swaps the hidden (and mispriced) grok-4-0709 for Grok 4.3, with its pricing corrected $0.2/$1.5 → $3/$15. grok-4.3 / grok-build-0.1 join the vision whitelist — `pickVisionSibling` for text-only xAI picks now lands on the cheaper public flagship instead of the hidden 4-0709.
+- **GLM-5.1 launch promo ended (2026-06-05)** — per-token $1.40/$4.40 now; the picker's flat-rate section leads with `zai/glm-5` (permanent $0.001/call, not a promo; new `glm-5` shortcut).
+- **DeepSeek V4 Pro at its permanent list price** $0.435/$0.87 (the 75% launch promo became standing after 2026-05-31); picker label de-promo'd, router comments refreshed. Routing unchanged.
+
 ## Unreleased
 
 ### Added

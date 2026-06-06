@@ -39,7 +39,10 @@ const VISION_MODELS = new Set<string>([
   'google/gemini-3.1-pro',
   'google/gemini-2.5-pro',
   'google/gemini-2.5-flash',
-  // xAI — only Grok 4 base supports vision; grok-4-1-fast-reasoning is text-only
+  // xAI — grok-4.3 (2026-06-04 flagship) and Grok 4 base support vision;
+  // grok-4-1-fast-reasoning is text-only. grok-build-0.1 accepts image input.
+  'xai/grok-4.3',
+  'xai/grok-build-0.1',
   'xai/grok-4-0709',
   'xai/grok-3',
   // Moonshot — K2.6 added vision + reasoning when it replaced K2.5

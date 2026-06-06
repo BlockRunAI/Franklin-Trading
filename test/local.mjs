@@ -5334,12 +5334,15 @@ test('picker trim: shortcuts for hidden models still resolve (muscle-memory pres
   assert.equal(resolveModel('o1'), 'openai/o1');
   assert.equal(resolveModel('o4'), 'openai/o4-mini');
   assert.equal(resolveModel('nano'), 'openai/gpt-5-nano');
-  // grok still maps to grok-3 — explicit user intent, picker hiding doesn't
-  // change the alias contract (same as kimi-k2.5 pattern).
-  assert.equal(resolveModel('grok'), 'xai/grok-3');
+  // grok promoted to the public flagship grok-4.3 (2026-06-04) — same
+  // flagship-promotion pattern as kimi → k2.6. Explicit pins still resolve.
+  assert.equal(resolveModel('grok'), 'xai/grok-4.3');
+  assert.equal(resolveModel('grok-3'), 'xai/grok-3');
+  assert.equal(resolveModel('grok-4'), 'xai/grok-4-0709');
+  assert.equal(resolveModel('grok-build'), 'xai/grok-build-0.1');
 });
 
-test('picker trim: hero shortcuts (opus, sonnet, gpt, gemini-3, grok-4) still in visible list', async () => {
+test('picker trim: hero shortcuts (opus, sonnet, gpt, gemini-3, grok) still in visible list', async () => {
   const { PICKER_CATEGORIES } = await import('../dist/ui/model-picker.js');
   const ids = PICKER_CATEGORIES.flatMap((c) => c.models.map((m) => m.id));
   assert.ok(ids.includes('anthropic/claude-opus-4.8'));
@@ -5347,7 +5350,7 @@ test('picker trim: hero shortcuts (opus, sonnet, gpt, gemini-3, grok-4) still in
   assert.ok(ids.includes('openai/gpt-5.5'));
   assert.ok(ids.includes('google/gemini-3.1-pro'));
   assert.ok(ids.includes('google/gemini-2.5-pro'));
-  assert.ok(ids.includes('xai/grok-4-0709'));
+  assert.ok(ids.includes('xai/grok-4.3')); // grok-4-0709 hidden on gateway; 4.3 is the public flagship row
 });
 
 test('picker trim: total visible entries dropped meaningfully', async () => {
@@ -8256,8 +8259,9 @@ test('vision routing: pickVisionSibling stays within the user-chosen family', as
   assert.ok(isVisionModel(pickVisionSibling('deepseek/deepseek-v4-pro')));
 
   // xai/grok-4-1-fast-reasoning (text-only) → must stay in xai family if any
-  // xai vision sibling exists. Currently xai/grok-4-0709 is vision-capable.
-  assert.equal(pickVisionSibling('xai/grok-4-1-fast-reasoning'), 'xai/grok-4-0709');
+  // xai vision sibling exists. grok-4.3 (public flagship, vision-capable,
+  // $1.5/$4) now leads the xai vision list — cheaper than the hidden 4-0709.
+  assert.equal(pickVisionSibling('xai/grok-4-1-fast-reasoning'), 'xai/grok-4.3');
 
   // openai/gpt-5.3-codex (text-only) → must stay in openai family
   const codexSwap = pickVisionSibling('openai/gpt-5.3-codex');
