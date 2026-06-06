@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/franklin-trading",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Franklin Trading — The AI trading agent with a wallet. Researches, backtests, paper-trades and live-trades autonomously, paying per call in USDC. Crypto-first. Apache-2.0.",
   "type": "module",
   "exports": {

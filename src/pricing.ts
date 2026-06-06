@@ -89,10 +89,10 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; perC
   'moonshot/kimi-k2.5': { input: 0.6, output: 3.0 },
   'nvidia/kimi-k2.5': { input: 0.55, output: 2.5 },
   // PROMOTION (active ~2026-04): flat $0.001/call for all GLM models
-  'zai/glm-5': { input: 0, output: 0, perCall: 0.001 },
+  'zai/glm-5': { input: 0.6, output: 1.92 }, // flat promo ended 2026-06-06 — per-token now
   'zai/glm-5.1': { input: 1.40, output: 4.40 }, // launch promo ended 2026-06-05 — per-token now
-  'zai/glm-5-turbo': { input: 0, output: 0, perCall: 0.001 },
-  'zai/glm-5.1-turbo': { input: 0, output: 0, perCall: 0.001 },  // client alias for zai/glm-5-turbo
+  'zai/glm-5-turbo': { input: 1.2, output: 4.0 }, // flat promo ended 2026-06-06 — per-token now
+  'zai/glm-5.1-turbo': { input: 1.2, output: 4.0 },  // client alias for zai/glm-5-turbo
 };
 
 /** Opus pricing for savings calculations — tracks the current flagship. */

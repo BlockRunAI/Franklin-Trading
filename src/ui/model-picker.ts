@@ -147,16 +147,6 @@ export interface ModelCategory {
  */
 export const PICKER_CATEGORIES: ModelCategory[] = [
   {
-    // glm-5.1's launch promo ended 2026-06-05 (per-token $1.40/$4.40 now;
-    // shortcut `glm` still resolves to it). glm-5 / glm-5-turbo are permanent
-    // flat-rate SKUs (gateway billingMode: "flat"), not a promo.
-    category: '🔥 Flat rate ($0.001/call)',
-    models: [
-      { id: 'zai/glm-5',       shortcut: 'glm-5',     label: 'GLM-5',       price: '$0.001/call', highlight: true },
-      { id: 'zai/glm-5-turbo', shortcut: 'glm-turbo', label: 'GLM-5 Turbo', price: '$0.001/call', highlight: true },
-    ],
-  },
-  {
     category: '🧠 Smart routing (auto-pick)',
     models: [
       // Auto is the only routing profile surfaced in the picker. Eco and
@@ -208,6 +198,9 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
       // Re-aliased to V4 Flash Chat upstream — context 1M, price 30% lower.
       { id: 'deepseek/deepseek-chat',              shortcut: 'deepseek', label: 'DeepSeek V4 Flash Chat', price: '$0.2/$0.4' },
       { id: 'moonshot/kimi-k2.6',                  shortcut: 'kimi',     label: 'Kimi K2.6',           price: '$0.95/$4' },
+      // GLM flat-rate promos fully ended 2026-06-06 — whole family per-token
+      // now (glm-5 $0.60/$1.92; `glm` shortcut still pins flagship glm-5.1).
+      { id: 'zai/glm-5',                           shortcut: 'glm-5',    label: 'GLM-5',               price: '$0.6/$1.92' },
       // Minimax M2.7 hidden to make room for V4 Pro in Reasoning + V4 Flash
       // (free) without exceeding the picker's 24-entry cap. Shortcut `minimax`
       // still resolves to it.

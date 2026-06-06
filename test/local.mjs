@@ -5356,11 +5356,10 @@ test('picker trim: hero shortcuts (opus, sonnet, gpt, gemini-3, grok) still in v
 test('picker trim: total visible entries dropped meaningfully', async () => {
   const { PICKER_CATEGORIES } = await import('../dist/ui/model-picker.js');
   const total = PICKER_CATEGORIES.reduce((sum, c) => sum + c.models.length, 0);
-  // Sanity floor: at least the 11 entries we explicitly keep
-  // (2 promo + 3 routing + 6 premium + 4 reasoning + 6 budget + 2 free = 23
-  //  with minimax/2.5-pro kept; at least cover the hard floor).
-  assert.ok(total >= 22, `expected >= 22 visible entries, got ${total}`);
-  assert.ok(total <= 24, `expected <= 24 visible entries (33 → ~22), got ${total}`);
+  // Sanity bounds. Flat-rate GLM category removed 2026-06-06 (promos fully
+  // ended); GLM-5 moved into Budget.
+  assert.ok(total >= 20, `expected >= 20 visible entries, got ${total}`);
+  assert.ok(total <= 24, `expected <= 24 visible entries (33 → ~21), got ${total}`);
 });
 
 // ─── nemotron prose stripper ──────────────────────────────────────────────

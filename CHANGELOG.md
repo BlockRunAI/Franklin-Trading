@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.1 — 2026-06-06
+
+### Changed
+- **GLM flat pricing fully retired** (backend d840de7): `zai/glm-5` $0.60/$1.92 and `zai/glm-5-turbo` $1.20/$4.00 per-token since 2026-06-06 (glm-5.1 stays $1.40/$4.40). Pricing rows updated; the picker's flat-rate category is removed (nothing qualifies) and GLM-5 moves into Budget. Mirrors upstream Franklin 3.26.1.
+
 ## 0.2.0 — 2026-06-06
 
 ### Changed
