@@ -27,6 +27,7 @@ import { initCommand } from './commands/init.js';
 import { uninitCommand } from './commands/uninit.js';
 import { proxyCommand } from './commands/proxy.js';
 import { buildTaskCommand } from './commands/task.js';
+import { strategyRunCommand } from './commands/run.js';
 
 import { VERSION as version } from './config.js';
 
@@ -249,6 +250,16 @@ program
   .action(async () => {
     const { listAvailablePlugins } = await import('./commands/plugin.js');
     listAvailablePlugins();
+  });
+
+program
+  .command('run <strategy>')
+  .description('Run a strategy artifact (M1 roadmap placeholder)')
+  .option('--mode <mode>', 'backtest | paper | live', 'backtest')
+  .option('--from <date>', 'Backtest start date (reserved for M1 runner)')
+  .option('--to <date>', 'Backtest end date (reserved for M1 runner)')
+  .action((strategyName: string, options: { mode?: string; from?: string; to?: string }) => {
+    strategyRunCommand(strategyName, options);
   });
 
 // `franklin-trading task <subcmd>` — human-facing CLI for detached background tasks.

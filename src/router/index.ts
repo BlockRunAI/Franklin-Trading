@@ -664,17 +664,20 @@ export function getFallbackChain(
 // models was being handed to qwen3-coder-480b — a coder model trying to
 // do technical analysis. Reported 2026-05-03 with a markets question
 // routed to a coder model on Sonnet failure.
+// 2026-06-07: nvidia/glm-4.7 dropped from every chain — NVIDIA NIM hung, the
+// gateway redirects it to qwen3-coder-480b (already present here), so routing to
+// it just wasted a slot and mislabeled the model. qwen3-coder-480b + llama-4-
+// maverick are both healthy and cover all categories.
 const FREE_MODELS_BY_CATEGORY: Record<Category, string[]> = {
-  coding:    ['nvidia/qwen3-coder-480b', 'nvidia/glm-4.7', 'nvidia/llama-4-maverick'],
-  trading:   ['nvidia/glm-4.7', 'nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
-  research:  ['nvidia/glm-4.7', 'nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
-  reasoning: ['nvidia/glm-4.7', 'nvidia/qwen3-coder-480b', 'nvidia/llama-4-maverick'],
-  chat:      ['nvidia/llama-4-maverick', 'nvidia/glm-4.7', 'nvidia/qwen3-coder-480b'],
-  creative:  ['nvidia/llama-4-maverick', 'nvidia/glm-4.7', 'nvidia/qwen3-coder-480b'],
+  coding:    ['nvidia/qwen3-coder-480b', 'nvidia/llama-4-maverick'],
+  trading:   ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
+  research:  ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
+  reasoning: ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
+  chat:      ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
+  creative:  ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
 };
 
 const DEFAULT_FREE_CHAIN: string[] = [
-  'nvidia/glm-4.7',
   'nvidia/llama-4-maverick',
   'nvidia/qwen3-coder-480b',
 ];

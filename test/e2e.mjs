@@ -34,6 +34,18 @@ import { fileURLToPath } from 'node:url';
 const DIST = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 const TIMEOUT_MS = 90_000; // 90s per test — model calls can be slow
 
+function timeoutEnvForHarness(timeoutMs) {
+  // Franklin's production default allows 180s to first token, but many e2e
+  // tests have 60-90s budgets. Keep child model timeouts inside the harness
+  // budget so Franklin can surface a classified [Timeout] result that the
+  // live suite can skip as upstream flake, instead of Node killing the test.
+  const perAttempt = Math.max(5_000, Math.floor((timeoutMs - 10_000) / 2));
+  return {
+    request: String(Math.min(45_000, perAttempt)),
+    stream: String(Math.min(30_000, perAttempt)),
+  };
+}
+
 // ─── Helper ────────────────────────────────────────────────────────────────
 
 /**
@@ -47,9 +59,20 @@ function franklin(prompt, { cwd, timeoutMs = TIMEOUT_MS, model: modelOverride } 
     // Default to GLM for better reliability than free-tier models.
     // Override via the per-call `model` option or the E2E_MODEL env var.
     const model = modelOverride || process.env.E2E_MODEL || 'zai/glm-5.1';
+    const timeoutEnv = timeoutEnvForHarness(timeoutMs);
     const proc = spawn('node', [DIST, '--model', model, '--trust'], {
       cwd: workDir,
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        FRANKLIN_MODEL_REQUEST_TIMEOUT_MS:
+          process.env.FRANKLIN_MODEL_REQUEST_TIMEOUT_MS ??
+          process.env.FRANKLIN_MODEL_IDLE_TIMEOUT_MS ??
+          timeoutEnv.request,
+        FRANKLIN_MODEL_STREAM_IDLE_TIMEOUT_MS:
+          process.env.FRANKLIN_MODEL_STREAM_IDLE_TIMEOUT_MS ??
+          process.env.FRANKLIN_MODEL_IDLE_TIMEOUT_MS ??
+          timeoutEnv.stream,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

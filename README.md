@@ -65,8 +65,9 @@ franklin-trading balance
 # Start with a budget — Franklin Trading stops when the wallet runs dry
 franklin-trading --max-spend 5
 
-# Or run a strategy directly
-franklin-trading run btc-funding-basis --mode paper
+# M1 strategy-runner work is in progress; today, use the agent's paper
+# trading tools from an interactive session.
+franklin-trading
 ```
 
 ## A 60-second tour
@@ -93,7 +94,11 @@ Every persona output, every model call, every gas fee, every fill is
 written to `~/.blockrun/sessions/<uuid>.jsonl`. Resume any session, search
 across all of them, audit every trade.
 
-## Authoring a strategy
+## Planned Strategy DSL (M1)
+
+The author-facing strategy helper is available for early artifacts, while the
+`franklin-trading run <strategy>` command and unified backtest/paper/live runtime
+are still M1 roadmap work.
 
 ```ts
 // src/strategies/btc-funding-basis.strategy.ts
@@ -113,7 +118,7 @@ export default defineStrategy({
 });
 ```
 
-One artifact runs three modes:
+Once the M1 runner lands, one artifact will run three modes:
 
 ```bash
 franklin-trading run btc-funding-basis --mode backtest --from 2024-01-01
@@ -137,7 +142,7 @@ franklin-trading run btc-funding-basis --mode live       # real on-chain orders
                               │
    Role personas (NEW): Analyst → Bull / Bear → Trader → Risk → Compliance
                               │
-   Strategy lifecycle (NEW): same artifact, 3 modes (backtest/paper/live)
+   Strategy surface (M1): defineStrategy now; unified runner roadmap
                               │
    Execution: Hyperliquid · Jupiter · 0x · Polymarket · Binance (read-only)
                               │

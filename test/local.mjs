@@ -6560,10 +6560,12 @@ test('pickFreeFallback: coding category prefers qwen3-coder first', async () => 
   assert.equal(pick, 'nvidia/qwen3-coder-480b');
 });
 
-test('pickFreeFallback: trading category skips coder, picks glm-4.7', async () => {
+test('pickFreeFallback: trading category skips coder, picks the general workhorse', async () => {
   const { pickFreeFallback } = await import('../dist/router/index.js');
   const pick = pickFreeFallback('trading', new Set());
-  assert.equal(pick, 'nvidia/glm-4.7', 'trading should not start with a coder model');
+  // glm-4.7 dropped 2026-06-07 (NVIDIA NIM hung) — llama-4-maverick is now the
+  // general-purpose lead for non-coding categories.
+  assert.equal(pick, 'nvidia/llama-4-maverick', 'trading should not start with a coder model');
   assert.notEqual(pick, 'nvidia/qwen3-coder-480b');
 });
 
@@ -6582,8 +6584,8 @@ test('pickFreeFallback: respects alreadyFailed set', async () => {
   const failed = new Set(['nvidia/qwen3-coder-480b']);
   const pick = pickFreeFallback('coding', failed);
   assert.notEqual(pick, 'nvidia/qwen3-coder-480b');
-  assert.ok(['nvidia/glm-4.7', 'nvidia/llama-4-maverick'].includes(pick),
-    `expected glm-4.7 or llama-4-maverick, got ${pick}`);
+  assert.equal(pick, 'nvidia/llama-4-maverick',
+    `after qwen3-coder fails, coding should fall to llama-4-maverick, got ${pick}`);
 });
 
 test('pickFreeFallback: unknown category uses default chain (general model first)', async () => {
