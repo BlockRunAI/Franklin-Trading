@@ -75,10 +75,10 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   'deepseek-v4': 'nvidia/deepseek-v4-flash',
   'deepseek-v4-flash': 'nvidia/deepseek-v4-flash',
   dsv4: 'nvidia/deepseek-v4-flash',
-  // V3.2 free fallback for users who specifically want the older Terminus
-  // checkpoint instead of the V4 Flash default.
-  'deepseek-v3.2': 'nvidia/deepseek-v3.2',
-  'deepseek-v3': 'nvidia/deepseek-v3.2',
+  // V3.2 NVIDIA NIM hung (server redirects to V4 Flash) — point the aliases
+  // straight at the live V4 Flash so the picker doesn't hand back a dead id.
+  'deepseek-v3.2': 'nvidia/deepseek-v4-flash',
+  'deepseek-v3': 'nvidia/deepseek-v4-flash',
   // Free (agent-tested BlockRun gateway free tier — refreshed 2026-04)
   free: 'nvidia/qwen3-coder-480b',
   glm4: 'nvidia/qwen3-coder-480b',

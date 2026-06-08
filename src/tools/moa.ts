@@ -20,7 +20,7 @@ import { ModelClient } from '../agent/llm.js';
 const REFERENCE_MODELS = [
   'nvidia/qwen3-coder-480b',                // Free, agent-tested coding
   'nvidia/llama-4-maverick',                // Free, agent-tested general chat
-  'nvidia/glm-4.7',                         // Free chat fallback
+  'nvidia/deepseek-v4-flash',               // Free, 1M ctx (was glm-4.7 — NVIDIA NIM hung 2026-06-07)
   'google/gemini-2.5-flash',                // Fast, cheap
   'deepseek/deepseek-chat',                 // Cheap, good reasoning
 ];
