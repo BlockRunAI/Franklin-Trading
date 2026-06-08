@@ -40,6 +40,7 @@ import {
   defiLlamaYieldsCapability,
   defiLlamaPriceCapability,
 } from './defillama.js';
+import { multiChainRpcCapability } from './rpc.js';
 import { predictionMarketCapability } from './prediction.js';
 import { blockrunCapability } from './blockrun.js';
 import { surfCapabilities } from './surf.js';
@@ -140,6 +141,7 @@ export const allCapabilities: CapabilityHandler[] = [
   defiLlamaChainsCapability,
   defiLlamaYieldsCapability,
   defiLlamaPriceCapability,
+  multiChainRpcCapability, // read-only JSON-RPC across 40+ chains ($0.002/call)
   predictionMarketCapability, // Polymarket / Kalshi / matching / smart money via Predexon
   // ─── Generic x402-paid gateway primitive + typed Surf surface ────────
   blockrunCapability,            // Long-tail Surf paths + future partners
