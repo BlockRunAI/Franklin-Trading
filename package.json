@@ -74,7 +74,7 @@
   },
   "homepage": "https://trading.franklin.run",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@blockrun/llm": "^2.0.0",
