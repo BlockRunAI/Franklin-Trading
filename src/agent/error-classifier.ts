@@ -110,6 +110,24 @@ export function classifyAgentError(message: string): AgentErrorInfo {
     };
   }
 
+  // Free-model gateway auth hiccup — NOT the same as the '401'/'auth'
+  // branch above. BlockRun's free routing occasionally proxies through an
+  // upstream (e.g. NVIDIA NIM) whose credential briefly rejects the call
+  // with 403 "Forbidden" / "Authorization failed" even though the
+  // gateway's own auth is fine — the same request typically succeeds on
+  // retry. Classify as 'server' (not 'auth') so it gets the normal
+  // transient-retry budget and the server-error streak guard's automatic
+  // model fallback below, instead of the non-retryable 'auth' path (which
+  // tells the user to reconfigure their own key — there's nothing for
+  // them to fix here).
+  if (includesAny(err, ['authorization failed']) ||
+      (/\b403\b/.test(err) && err.includes('forbidden'))) {
+    return {
+      category: 'server', label: 'Server', isTransient: true,
+      suggestion: 'The free-model gateway had a transient authorization hiccup upstream — this usually clears on retry. Use /retry, or /model to switch if it persists.',
+    };
+  }
+
   if (includesAny(err, [
     '429',
     'rate limit',

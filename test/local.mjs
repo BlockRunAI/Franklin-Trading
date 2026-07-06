@@ -1816,6 +1816,40 @@ test('error classifier catches gateway 503 in all thrown shapes', async () => {
   assert.equal(highDemand.maxRetries, 3);
 });
 
+// Regression: the SOL-chain free-model gateway (sol.blockrun.ai) proxies
+// through an upstream (NVIDIA NIM) whose credential is flaky — roughly 1 in
+// 3 calls comes back "403 Forbidden Authorization failed" even though the
+// gateway's own auth is fine and the very same request succeeds on retry.
+// Before this fix neither '401'/'unauthorized' (auth branch) nor '500'-'504'
+// (server branch) matched "403", so the error fell through to the catch-all
+// 'unknown'/isTransient:false and the agent loop gave up on a hiccup that
+// clears on its own.
+test('error classifier treats flaky gateway 403 as transient, not as a user auth failure', async () => {
+  const { classifyAgentError } = await import('../dist/agent/error-classifier.js');
+
+  const forbidden = classifyAgentError('HTTP 403: Forbidden Authorization failed');
+  assert.equal(forbidden.category, 'server');
+  assert.equal(forbidden.isTransient, true);
+
+  // The exact wording seen in production (no "HTTP " prefix).
+  const live = classifyAgentError('API error: 403 Forbidden Authorization failed');
+  assert.equal(live.category, 'server');
+  assert.equal(live.isTransient, true);
+
+  // A bare "403 Forbidden" with no echoed "Authorization failed" — same
+  // transient-gateway-hiccup shape, different upstream wording.
+  const bare403 = classifyAgentError('HTTP 403: Forbidden');
+  assert.equal(bare403.category, 'server');
+  assert.equal(bare403.isTransient, true);
+
+  // A real 401/invalid-key error must stay non-transient — this fix must
+  // not loosen the existing 'auth' branch (that one needs the user to
+  // reconfigure their own key; retrying won't help).
+  const realAuth = classifyAgentError('401 Unauthorized: invalid API key');
+  assert.equal(realAuth.category, 'auth');
+  assert.equal(realAuth.isTransient, false);
+});
+
 test('workflow formatter renders aborted steps with warning icon', async () => {
   const { formatWorkflowResult } = await import('../dist/plugins/runner.js');
 
