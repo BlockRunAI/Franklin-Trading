@@ -1824,23 +1824,24 @@ test('error classifier catches gateway 503 in all thrown shapes', async () => {
 // (server branch) matched "403", so the error fell through to the catch-all
 // 'unknown'/isTransient:false and the agent loop gave up on a hiccup that
 // clears on its own.
+// The match is deliberately ANCHORED to "authorization failed" + a
+// 403/forbidden context and capped at maxRetries: 2 — on paid models every
+// transient retry re-runs the 402→sign-payment→resend cycle, so classifying
+// a permanent 403 (revoked access, geo/WAF block) as transient would spend
+// real USDC on requests that can never succeed.
 test('error classifier treats flaky gateway 403 as transient, not as a user auth failure', async () => {
   const { classifyAgentError } = await import('../dist/agent/error-classifier.js');
 
   const forbidden = classifyAgentError('HTTP 403: Forbidden Authorization failed');
   assert.equal(forbidden.category, 'server');
   assert.equal(forbidden.isTransient, true);
+  assert.equal(forbidden.maxRetries, 2);  // capped — each paid retry costs money
 
   // The exact wording seen in production (no "HTTP " prefix).
   const live = classifyAgentError('API error: 403 Forbidden Authorization failed');
   assert.equal(live.category, 'server');
   assert.equal(live.isTransient, true);
-
-  // A bare "403 Forbidden" with no echoed "Authorization failed" — same
-  // transient-gateway-hiccup shape, different upstream wording.
-  const bare403 = classifyAgentError('HTTP 403: Forbidden');
-  assert.equal(bare403.category, 'server');
-  assert.equal(bare403.isTransient, true);
+  assert.equal(live.maxRetries, 2);
 
   // A real 401/invalid-key error must stay non-transient — this fix must
   // not loosen the existing 'auth' branch (that one needs the user to
@@ -1848,6 +1849,47 @@ test('error classifier treats flaky gateway 403 as transient, not as a user auth
   const realAuth = classifyAgentError('401 Unauthorized: invalid API key');
   assert.equal(realAuth.category, 'auth');
   assert.equal(realAuth.isTransient, false);
+});
+
+// Boundary pins for the flaky-403 branch: everything the anchored match must
+// NOT catch. Each of these shapes is a permanent failure (or belongs to a
+// more specific category) where auto-retry would be wrong — and on paid
+// models, costly.
+test('error classifier flaky-403 branch does not swallow permanent or more-specific 403 shapes', async () => {
+  const { classifyAgentError } = await import('../dist/agent/error-classifier.js');
+
+  // Precedence pin: a message carrying BOTH auth and gateway-hiccup signals
+  // must keep classifying as non-transient 'auth' — guards against the
+  // flaky-403 branch ever being hoisted above the auth branch.
+  const mixed = classifyAgentError('401 Unauthorized: authorization failed');
+  assert.equal(mixed.category, 'auth');
+  assert.equal(mixed.isTransient, false);
+
+  // Bare "403 Forbidden" with no "authorization failed" — commonly a
+  // permanent denial (revoked model access, geo/WAF block, policy
+  // rejection). Must NOT be transient: falls through to 'unknown'.
+  const bare403 = classifyAgentError('HTTP 403: Forbidden');
+  assert.equal(bare403.category, 'unknown');
+  assert.equal(bare403.isTransient, false);
+
+  // 403 worded without "forbidden" — same fall-through.
+  const denied = classifyAgentError('HTTP 403: Access denied');
+  assert.equal(denied.category, 'unknown');
+  assert.equal(denied.isTransient, false);
+
+  // "authorization failed" with no 403/forbidden context (e.g. an OAuth
+  // token that needs re-auth) — not the gateway hiccup shape; retrying
+  // cannot help, so it must not classify as transient.
+  const oauthPerm = classifyAgentError('authorization failed — please re-run login');
+  assert.equal(oauthPerm.category, 'unknown');
+  assert.equal(oauthPerm.isTransient, false);
+
+  // Ordering pin: GCP-style quota-as-403 must keep the rate_limit
+  // category (tighter 1-retry budget + Retry-After handling), not the
+  // broader server budget — the flaky-403 branch sits BELOW rate_limit.
+  const quota403 = classifyAgentError('HTTP 403: Forbidden — quota exceeded for this project');
+  assert.equal(quota403.category, 'rate_limit');
+  assert.equal(quota403.maxRetries, 1);
 });
 
 test('workflow formatter renders aborted steps with warning icon', async () => {
