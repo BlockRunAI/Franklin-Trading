@@ -129,6 +129,33 @@ export function classifyAgentError(message: string): AgentErrorInfo {
     };
   }
 
+  // Free-model gateway auth hiccup — NOT the same as the '401'/'auth'
+  // branch above. BlockRun's free routing occasionally proxies through an
+  // upstream (e.g. NVIDIA NIM) whose credential briefly rejects the call
+  // with 403 "Forbidden Authorization failed" even though the gateway's
+  // own auth is fine — the same request typically succeeds on retry.
+  // Anchored on the observed "authorization failed" wording co-occurring
+  // with a 403/forbidden context: permanent 403 denials (revoked model
+  // access, geo/WAF blocks, policy rejections) must NOT classify as
+  // transient, because on paid models every retry re-runs the
+  // 402 → sign-payment → resend cycle in llm.ts — an over-broad match
+  // here spends real USDC on requests that can never succeed.
+  // maxRetries: 2 absorbs the observed ~1-in-3 flake rate without letting
+  // a persistent 403 burn the full default retry budget. Classified as
+  // 'server' (not 'auth') so it gets the server-error streak guard's
+  // automatic model fallback in the agent loop (loop.ts), instead of the
+  // non-retryable 'auth' path (which tells the user to reconfigure their
+  // own key — there's nothing for them to fix here). Placed AFTER the
+  // rate-limit branch so a "403 ... quota exceeded" (GCP-style) keeps its
+  // tighter rate_limit budget and Retry-After handling.
+  if (err.includes('authorization failed') &&
+      (/\b403\b/.test(err) || err.includes('forbidden'))) {
+    return {
+      category: 'server', label: 'Server', isTransient: true, maxRetries: 2,
+      suggestion: 'The provider returned a transient-looking authorization error — this often clears on retry. Use /retry, or /model to switch if it persists.',
+    };
+  }
+
   if (includesAny(err, [
     'prompt is too long',
     'context length',

@@ -1609,8 +1609,9 @@ export async function interactiveSession(
         }
 
         if (classified.isTransient && recoveryAttempts < effectiveMaxRetries) {
-          // Server-error streak guard: if the same model 5xx's twice in a row
-          // it's almost always an upstream incident, not a blip. Switch to
+          // Server-error streak guard: if the same model fails with
+          // server-category errors (5xx, transient gateway 403) twice in a
+          // row it's almost always an upstream incident, not a blip. Switch to
           // the next routing fallback instead of waiting out 5 backoffs on a
           // dead provider — same idea as the payment-failure auto-fallback
           // below, but for transient server errors. Skipped for non-server
@@ -1632,7 +1633,7 @@ export async function interactiveSession(
                 recoveryAttempts = 0;
                 onEvent({
                   kind: 'text_delta',
-                  text: `\n*${resolvedModel} keeps 5xx'ing (${streak} in a row) — switching to ${nextModel}*\n`,
+                  text: `\n*${resolvedModel} keeps failing with server errors (${streak} in a row) — switching to ${nextModel}*\n`,
                 });
                 continue;
               }

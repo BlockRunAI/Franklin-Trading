@@ -3,6 +3,12 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.5 — 2026-07-17
+
+### Fixed
+- **Flaky free-model gateway 403s no longer kill the session** ([#3](https://github.com/BlockRunAI/Franklin-Trading/pull/3), thanks [@anicca-earn](https://github.com/anicca-earn) for the root-cause analysis and fix). The SOL-chain gateway's upstream (NVIDIA NIM) intermittently rejects ~1 in 3 calls with `403 Forbidden Authorization failed` even though the same request succeeds on retry; `classifyAgentError()` had no 403 branch, so these fell to non-retryable `unknown` and the agent gave up. Now classified as transient `server` — anchored on the observed `authorization failed` + 403/forbidden signature and capped at `maxRetries: 2`, so permanent 403 denials (revoked model access, geo/WAF blocks) don't trigger paid retries. Placed below the rate-limit branch so `403 ... quota exceeded` keeps its tighter `rate_limit` handling.
+- Server-error streak-guard notice no longer claims a model "keeps 5xx'ing" now that transient 403s also feed the streak (`src/agent/loop.ts`).
+
 ## 0.2.1 — 2026-06-06
 
 ### Changed
