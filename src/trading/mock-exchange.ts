@@ -13,13 +13,18 @@
 
 import type { Fill, Side } from './portfolio.js';
 
+export interface ExchangeOrder {
+  symbol: string;
+  side: Side;
+  qty: number;
+  priceUsd: number;
+}
+
 export interface ExchangeClient {
-  placeOrder(order: {
-    symbol: string;
-    side: Side;
-    qty: number;
-    priceUsd: number;
-  }): Promise<Fill>;
+  // Risk checks need the expected fee before an order reaches the venue.
+  // Implementations must use the same fee model for estimation and fills.
+  estimateFee(order: ExchangeOrder): number | Promise<number>;
+  placeOrder(order: ExchangeOrder): Promise<Fill>;
   // Live mark-price for portfolio valuation. Real adapters hit the ticker
   // endpoint; MockExchange reads from its config.
   getPrice(symbol: string): Promise<number | null>;
@@ -44,23 +49,20 @@ export class MockExchange implements ExchangeClient {
     this.prices[symbol] = priceUsd;
   }
 
-  async placeOrder(order: {
-    symbol: string;
-    side: Side;
-    qty: number;
-    priceUsd: number;
-  }): Promise<Fill> {
+  estimateFee(order: ExchangeOrder): number {
+    return (order.qty * order.priceUsd * this.feeBps) / 10_000;
+  }
+
+  async placeOrder(order: ExchangeOrder): Promise<Fill> {
     if (!(order.symbol in this.prices)) {
       throw new Error(`MockExchange has no quote for ${order.symbol}`);
     }
-    const notional = order.qty * order.priceUsd;
-    const feeUsd = (notional * this.feeBps) / 10_000;
     return {
       symbol: order.symbol,
       side: order.side,
       qty: order.qty,
       priceUsd: order.priceUsd,
-      feeUsd,
+      feeUsd: this.estimateFee(order),
     };
   }
 

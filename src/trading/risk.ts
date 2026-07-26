@@ -25,6 +25,7 @@ export interface OrderRequest {
   side: Side;
   qty: number;
   priceUsd: number;
+  feeUsd?: number;
 }
 
 export interface RiskDecision {
@@ -48,11 +49,19 @@ export class RiskEngine {
     }
 
     const notional = order.qty * order.priceUsd;
-
-    if (notional > portfolio.cashUsd) {
+    const feeUsd = order.feeUsd ?? 0;
+    if (!Number.isFinite(feeUsd) || feeUsd < 0) {
       return {
         allowed: false,
-        reason: `Insufficient cash: order needs $${notional.toFixed(2)} but only $${portfolio.cashUsd.toFixed(2)} available`,
+        reason: `Invalid estimated fee: ${feeUsd}`,
+      };
+    }
+    const cashRequired = notional + feeUsd;
+
+    if (cashRequired > portfolio.cashUsd) {
+      return {
+        allowed: false,
+        reason: `Insufficient cash: order needs $${cashRequired.toFixed(2)} including $${feeUsd.toFixed(2)} estimated fee but only $${portfolio.cashUsd.toFixed(2)} available`,
       };
     }
 

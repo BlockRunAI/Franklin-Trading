@@ -3101,6 +3101,24 @@ test('RiskEngine: rejects buy that exceeds available cash regardless of caps', a
   assert.match(decision.reason ?? '', /insufficient cash/i);
 });
 
+test('RiskEngine: includes the estimated exchange fee in the buy cash check', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+
+  const decision = risk.check(pf, {
+    symbol: 'BTC',
+    side: 'buy',
+    qty: 0.001,
+    priceUsd: 100_000,
+    feeUsd: 0.10,
+  });
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reason ?? '', /insufficient cash/i);
+  assert.match(decision.reason ?? '', /\$100\.10/);
+});
+
 test('RiskEngine: sell is allowed even when caps are exceeded, as long as position exists', async () => {
   const { RiskEngine } = await import('../dist/trading/risk.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
@@ -3387,6 +3405,24 @@ test('TradingEngine: executes a compliant order through risk → exchange → po
   assert.ok(Math.abs(portfolio.cashUsd - (1000 - 140.14)) < 1e-9);
 });
 
+test('TradingEngine: blocks a buy when notional fits cash but notional plus fee does not', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { MockExchange } = await import('../dist/trading/mock-exchange.js');
+
+  const portfolio = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  const exchange = new MockExchange({ prices: { BTC: 100_000 }, feeBps: 10 });
+  const engine = new TradingEngine({ portfolio, risk, exchange });
+
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 100_000 });
+  assert.equal(outcome.status, 'blocked');
+  assert.match(outcome.reason ?? '', /insufficient cash/i);
+  assert.equal(portfolio.getPosition('BTC'), undefined);
+  assert.equal(portfolio.cashUsd, 100);
+});
+
 test('TradingEngine: blocks order that violates risk and does NOT touch the exchange', async () => {
   const { TradingEngine } = await import('../dist/trading/engine.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
@@ -3394,6 +3430,7 @@ test('TradingEngine: blocks order that violates risk and does NOT touch the exch
 
   let placed = 0;
   const fakeExchange = {
+    estimateFee() { return 0; },
     async placeOrder() { placed++; throw new Error('should never be called'); },
     async getPrice() { return null; },
   };
