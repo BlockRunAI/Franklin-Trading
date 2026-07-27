@@ -5,13 +5,13 @@
 Franklin is the first AI agent in the **Autonomous Economic Agent** category — it doesn't just write text, it autonomously spends USDC from a user-funded wallet to execute real work: coding, trading, content generation.
 
 Three verticals under one brand:
-- **Dev agent** — coding, debugging, review across 55+ models with wallet-bound spending
+- **Dev agent** — coding, debugging, review across <!-- br:models.chatVisible -->66<!-- /br:models.chatVisible --> models with wallet-bound spending
 - **Trading agent** — signals, portfolio, risk, persistent P&L across sessions
 - **Content agent** — ImageGen, VideoGen, budget-tracked media production
 
 Built on three layers:
 1. **x402 micropayment protocol** — HTTP 402 native payments
-2. **BlockRun Gateway** — aggregates 55+ LLMs + paid APIs (Exa, DALL-E, future Runway/Suno/CoinGecko)
+2. **BlockRun Gateway** — aggregates <!-- br:models.chatVisible -->66<!-- /br:models.chatVisible --> LLMs + paid APIs (Exa, DALL-E, future Runway/Suno/CoinGecko)
 3. **Franklin Agent** — this repo, the reference client
 
 ## Commands
