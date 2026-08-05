@@ -18,7 +18,7 @@ Fund the wallet. Set a budget. Walk away — and come back to a book.
 > Franklin Trading is a fork of [Franklin](https://github.com/BlockRunAI/Franklin) — the
 > general-purpose Autonomous Economic Agent — specialized as a wallet-native trading
 > agent. It inherits Franklin's economic substrate (x402 micropayments, USDC settlement,
-> learned-weight model router across <!-- br:models.chatVisible -->66<!-- /br:models.chatVisible --> models, removable-by-design harness components)
+> learned-weight model router across <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models, removable-by-design harness components)
 > and adds a multi-role persona debate, a unified Backtest → Paper → Live strategy
 > lifecycle, multi-venue on-chain execution, and four moat layers nobody else ships.
 
