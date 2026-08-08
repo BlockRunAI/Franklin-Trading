@@ -43,22 +43,22 @@ export class TradingEngine {
 
   async openPosition(req: OpenPositionRequest): Promise<Outcome> {
     const { portfolio, risk, exchange } = this.deps;
-    const decision = risk.check(portfolio, {
+    const order = {
       symbol: req.symbol,
-      side: 'buy',
+      side: 'buy' as const,
       qty: req.qty,
       priceUsd: req.priceUsd,
+    };
+    const feeUsd = await exchange.estimateFee(order);
+    const decision = risk.check(portfolio, {
+      ...order,
+      feeUsd,
     });
     if (!decision.allowed) {
       return { status: 'blocked', reason: decision.reason ?? 'blocked by risk engine' };
     }
 
-    const fill = await exchange.placeOrder({
-      symbol: req.symbol,
-      side: 'buy',
-      qty: req.qty,
-      priceUsd: req.priceUsd,
-    });
+    const fill = await exchange.placeOrder(order);
     portfolio.applyFill(fill);
     return {
       status: 'filled',
