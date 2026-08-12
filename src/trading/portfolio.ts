@@ -20,7 +20,7 @@ export interface Fill {
   side: Side;
   qty: number;
   priceUsd: number;
-  feeUsd?: number;
+  feeUsd: number;
 }
 
 export interface Position {
@@ -76,7 +76,17 @@ export class Portfolio {
   }
 
   applyFill(fill: Fill): void {
-    const fee = fill.feeUsd ?? 0;
+    if (!Number.isFinite(fill.qty) || fill.qty <= 0) {
+      throw new RangeError(`Invalid fill quantity: ${fill.qty}`);
+    }
+    if (!Number.isFinite(fill.priceUsd) || fill.priceUsd <= 0) {
+      throw new RangeError(`Invalid fill price: ${fill.priceUsd}`);
+    }
+    if (!Number.isFinite(fill.feeUsd) || fill.feeUsd < 0) {
+      throw new RangeError(`Invalid fill fee: ${fill.feeUsd}`);
+    }
+
+    const fee = fill.feeUsd;
     const notional = fill.qty * fill.priceUsd;
 
     if (fill.side === 'buy') {

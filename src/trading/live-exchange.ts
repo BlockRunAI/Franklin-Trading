@@ -16,6 +16,7 @@
 
 import type { ExchangeClient, ExchangeOrder } from './mock-exchange.js';
 import type { Fill } from './portfolio.js';
+import { bpsFee } from './fees.js';
 
 /** Subset of src/trading/data.ts's PriceData that we actually consume. */
 export interface PricingClientResponse {
@@ -53,7 +54,7 @@ export class LiveExchange implements ExchangeClient {
   }
 
   estimateFee(order: ExchangeOrder): number {
-    return (order.qty * order.priceUsd * this.opts.feeBps) / 10_000;
+    return bpsFee(order, this.opts.feeBps);
   }
 
   async placeOrder(order: ExchangeOrder): Promise<Fill> {

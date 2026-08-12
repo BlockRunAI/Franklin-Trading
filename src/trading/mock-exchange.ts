@@ -12,6 +12,7 @@
  */
 
 import type { Fill, Side } from './portfolio.js';
+import { bpsFee } from './fees.js';
 
 export interface ExchangeOrder {
   symbol: string;
@@ -21,8 +22,8 @@ export interface ExchangeOrder {
 }
 
 export interface ExchangeClient {
-  // Risk checks need the expected fee before an order reaches the venue.
-  // Implementations must use the same fee model for estimation and fills.
+  // Return a conservative fee ceiling before an order reaches the venue.
+  // A fill must never charge more than the estimate returned for its order.
   estimateFee(order: ExchangeOrder): number | Promise<number>;
   placeOrder(order: ExchangeOrder): Promise<Fill>;
   // Live mark-price for portfolio valuation. Real adapters hit the ticker
@@ -50,7 +51,7 @@ export class MockExchange implements ExchangeClient {
   }
 
   estimateFee(order: ExchangeOrder): number {
-    return (order.qty * order.priceUsd * this.feeBps) / 10_000;
+    return bpsFee(order, this.feeBps);
   }
 
   async placeOrder(order: ExchangeOrder): Promise<Fill> {

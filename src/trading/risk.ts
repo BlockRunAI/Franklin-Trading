@@ -13,20 +13,22 @@
  * cap could otherwise trap the agent in a losing position it wants to exit.
  */
 
-import type { Portfolio, Side } from './portfolio.js';
+import type { Portfolio } from './portfolio.js';
 
 export interface RiskConfig {
   maxPositionUsd: number;
   maxTotalExposureUsd: number;
 }
 
-export interface OrderRequest {
+interface BaseOrderRequest {
   symbol: string;
-  side: Side;
   qty: number;
   priceUsd: number;
-  feeUsd?: number;
 }
+
+export type OrderRequest =
+  | (BaseOrderRequest & { side: 'buy'; feeUsd: number })
+  | (BaseOrderRequest & { side: 'sell'; feeUsd?: never });
 
 export interface RiskDecision {
   allowed: boolean;
@@ -37,6 +39,17 @@ export class RiskEngine {
   constructor(private config: RiskConfig) {}
 
   check(portfolio: Portfolio, order: OrderRequest): RiskDecision {
+    if (!Number.isFinite(order.qty) || order.qty <= 0) {
+      return { allowed: false, reason: `Invalid order quantity: ${order.qty}` };
+    }
+    if (!Number.isFinite(order.priceUsd) || order.priceUsd <= 0) {
+      return { allowed: false, reason: `Invalid order price: ${order.priceUsd}` };
+    }
+    const notional = order.qty * order.priceUsd;
+    if (!Number.isFinite(notional) || notional <= 0) {
+      return { allowed: false, reason: `Invalid order notional: ${notional}` };
+    }
+
     // Sells of existing positions are always permitted; exposure caps are
     // entry-side only, and Portfolio.applyFill enforces that we don't sell
     // more than we hold.
@@ -48,8 +61,7 @@ export class RiskEngine {
       return { allowed: true };
     }
 
-    const notional = order.qty * order.priceUsd;
-    const feeUsd = order.feeUsd ?? 0;
+    const feeUsd = order.feeUsd;
     if (!Number.isFinite(feeUsd) || feeUsd < 0) {
       return {
         allowed: false,
