@@ -54,6 +54,11 @@ export interface PermissionDecision {
   reason?: string;
 }
 
+export type PermissionPolicyFn = (
+  toolName: string,
+  input: Record<string, unknown>,
+) => PermissionDecision | undefined | Promise<PermissionDecision | undefined>;
+
 // ─── Default Rules ─────────────────────────────────────────────────────────
 
 const READ_ONLY_TOOLS = new Set([
@@ -104,14 +109,17 @@ export class PermissionManager {
   private mode: PermissionMode;
   private sessionAllowed = new Set<string>(); // "always allow" for this session
   private promptFn?: (toolName: string, description: string) => Promise<'yes' | 'no' | 'always'>;
+  private policyFn?: PermissionPolicyFn;
 
   constructor(
     mode: PermissionMode = 'default',
-    promptFn?: (toolName: string, description: string) => Promise<'yes' | 'no' | 'always'>
+    promptFn?: (toolName: string, description: string) => Promise<'yes' | 'no' | 'always'>,
+    policyFn?: PermissionPolicyFn,
   ) {
     this.mode = mode;
     this.rules = this.loadRules();
     this.promptFn = promptFn;
+    this.policyFn = policyFn;
   }
 
   /**
@@ -121,6 +129,11 @@ export class PermissionManager {
     toolName: string,
     input: Record<string, unknown>
   ): Promise<PermissionDecision> {
+    // Driver policy is authoritative and runs before trust/session/default
+    // shortcuts, so a persisted "always allow" cannot bypass a boundary.
+    const policyDecision = await this.policyFn?.(toolName, input);
+    if (policyDecision) return policyDecision;
+
     // Trust mode: allow everything
     if (this.mode === 'trust') {
       return { behavior: 'allow', reason: 'trust mode' };
@@ -170,6 +183,17 @@ export class PermissionManager {
         // dangerous and normal both ask, but dangerous gets a warning in describeAction
       }
       return { behavior: 'ask' };
+    }
+
+    // agent_talent: browsing the marketplace is a free read (auto-allow);
+    // hiring (action="run") spends USDC from the wallet and has no refund, so
+    // it asks — same policy as the other paid, irreversible tools (VoiceCall,
+    // BuyPhoneNumber). describeAction spells out the spend in the prompt.
+    if (toolName === 'agent_talent') {
+      const action = typeof input.action === 'string' ? input.action.toLowerCase() : '';
+      return action === 'run'
+        ? { behavior: 'ask' }
+        : { behavior: 'allow', reason: 'free marketplace browse' };
     }
 
     // Default: read-only tools are auto-allowed, others ask
@@ -379,6 +403,19 @@ export class PermissionManager {
         }
         return `Execute: ${preview}`;
       }
+      case 'Detach': {
+        const cmd = String(input.command ?? '');
+        const preview = cmd.length > 160 ? cmd.slice(0, 160) + '...' : cmd;
+        return `Run in background: ${preview}`;
+      }
+      case 'PolymarketBet': {
+        const action = String(input.action ?? 'unknown').toLowerCase();
+        const amount = input.amount != null ? String(input.amount)
+          : input.amount_usd != null ? `$${String(input.amount_usd)}`
+          : action === 'withdraw' ? 'full available balance' : 'not specified';
+        const destination = String(input.to_address ?? input.market_id ?? input.condition_id ?? 'default wallet/market');
+        return `Polymarket ${action} — amount: ${amount}; destination/market: ${destination}`;
+      }
       case 'Write': {
         const fp = (input.file_path as string) || '';
         return `Write file: ${fp}`;
@@ -390,6 +427,13 @@ export class PermissionManager {
       }
       case 'Agent':
         return `Launch sub-agent: ${(input.description as string) || (input.prompt as string)?.slice(0, 80) || 'task'}`;
+      case 'agent_talent': {
+        if (((input.action as string) || '').toLowerCase() === 'run') {
+          const slug = (input.slug as string) || 'a skill';
+          return `Hire '${slug}' from the agent marketplace — pays from your wallet (USDC on Base, up to $5/hire), charged only on a successful run.`;
+        }
+        return 'Browse the agent marketplace (free).';
+      }
       default:
         return JSON.stringify(input).slice(0, 120);
     }

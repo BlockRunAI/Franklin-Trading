@@ -37,6 +37,13 @@ export interface AgentErrorInfo {
    * malicious or buggy server can't pin the agent indefinitely.
    */
   retryAfterMs?: number;
+  /**
+   * The gateway rejected the model id itself (400 "Unknown model", 404, 410
+   * provider EOL) — not the request shape. Retrying the same id can never
+   * succeed; when the id came from Auto routing the loop feeds it to the
+   * router's dead-rung kill-switch (markModelUnavailable) and re-routes.
+   */
+  modelUnavailable?: boolean;
 }
 
 function includesAny(text: string, patterns: string[]): boolean {
@@ -65,6 +72,17 @@ export function classifyAgentError(message: string): AgentErrorInfo {
   // `Exa /v1/exa/search failed (402): {"error":"Payment verification failed",...}`.
   // Classify BEFORE the generic 'payment' branch below since the body
   // contains both 'payment' and 'verification failed'.
+  //
+  // Treated as transient with a small retry budget: real-world telemetry
+  // (2026-05-28 audit) shows the gateway intermittently rejects valid
+  // signed payments under burst load — identical prompts succeed 5s
+  // later. Most plausible root cause is a nonce-cache race in the
+  // gateway's replay protection. Retrying re-signs with a fresh nonce on
+  // each attempt (llm.ts derives a new nonce per request), so a retry
+  // is NOT a replay. Three attempts is enough to ride out the blip
+  // without burning tokens on a model whose wallet is genuinely
+  // misconfigured (clock skew, wrong chain) — those failure modes are
+  // deterministic and will exhaust the budget quickly.
   if (includesAny(err, [
     'verification failed',
     'payment verification',
@@ -75,8 +93,8 @@ export function classifyAgentError(message: string): AgentErrorInfo {
     'replay protection',
   ])) {
     return {
-      category: 'payment_rejected', label: 'PaymentRejected', isTransient: false, maxRetries: 0,
-      suggestion: 'The gateway rejected your signed payment. Run `franklin balance` to confirm funds + chain. Common causes: clock skew (resync system clock), wrong chain selected (use `/chain` to switch), or stale nonce (the same retry will fail). Switch to a free model with `/model free` to keep working.',
+      category: 'payment_rejected', label: 'PaymentRejected', isTransient: true, maxRetries: 3,
+      suggestion: 'The gateway rejected your signed payment. If this keeps happening: run `franklin balance` to confirm funds + chain. Common causes: clock skew (resync system clock), wrong chain selected (use `/chain` to switch). Transient blips are auto-retried.',
     };
   }
 
@@ -159,6 +177,9 @@ export function classifyAgentError(message: string): AgentErrorInfo {
   if (includesAny(err, [
     'prompt is too long',
     'context length',
+    'context_length_exceeded',   // OpenAI-style code, leaks via gateway for non-Anthropic models
+    'context window',
+    'context_window',
     'maximum context',
     'prompt too long',
     'token limit exceeded',
@@ -260,15 +281,24 @@ export function classifyAgentError(message: string): AgentErrorInfo {
   // "Unknown model: moonshot/kimi-k2". Without this branch the error falls
   // through to the catch-all 'unknown' category and shows the user a bare
   // "Type: Unknown" with no actionable next step.
+  // A retired id looks the same to the loop: NVIDIA EOLs surface as HTTP
+  // 410 through the gateway (qwen3-next 2026-07-27, deepseek-v4-flash
+  // 2026-08-12), and a model the gateway dropped from its catalog 400s as
+  // unknown. Either way the id is dead for the rest of the session.
   if (includesAny(err, [
     'unknown model',
     'model not found',
     'model does not exist',
     'no such model',
-  ])) {
+    'model has been retired',
+    'model is retired',
+    'model is no longer available',
+    'model no longer available',
+  ]) || (/\b410\b/.test(err) && err.includes('model'))) {
     return {
       category: 'schema', label: 'Schema', isTransient: false, maxRetries: 0,
-      suggestion: 'The gateway rejected the model id (unknown / typo). Use /model to pick a valid one, or upgrade Franklin if a fallback chain references a stale id.',
+      modelUnavailable: true,
+      suggestion: 'The gateway rejected the model id (unknown / retired). Use /model to pick a valid one, or upgrade Franklin if a fallback chain references a stale id.',
     };
   }
 

@@ -20,6 +20,11 @@ interface VimInputProps {
   focus?: boolean;
   showMode?: boolean;
   onModeChange?: (mode: VimMode) => void;
+  /** Probe the clipboard for an image and return the input-block to splice in
+   *  (or null if there's no image). Wired to the same path as PromptTextInput's
+   *  Ctrl+V fallback so vim-mode users on terminals that don't emit a
+   *  bracketed-paste event for images can still paste. */
+  onClipboardImage?: () => Promise<string | null>;
 }
 
 /**
@@ -73,6 +78,7 @@ export default function VimInput({
   focus = true,
   showMode = true,
   onModeChange,
+  onClipboardImage,
 }: VimInputProps) {
   const [mode, setMode] = useState<VimMode>('insert');
   const [cursor, setCursor] = useState(value.length);
@@ -80,6 +86,11 @@ export default function VimInput({
   const [yankBuf, setYankBuf] = useState(''); // internal clipboard
   const [undoStack, setUndoStack] = useState<string[]>([]); // simple undo
   const lastValueRef = useRef(value);
+  // Mirror the latest value prop every render so the async Ctrl+V clipboard
+  // insert (which resolves after the keypress) never splices into a stale
+  // string when the parent swaps `value` mid-probe — e.g. a submit clears the
+  // input, or another paste path writes first.
+  lastValueRef.current = value;
 
   // Keep cursor in bounds when value changes externally
   const clampedCursor = Math.min(cursor, mode === 'normal' ? Math.max(0, value.length - 1) : value.length);
@@ -166,6 +177,24 @@ export default function VimInput({
         saveUndo();
         setYankBuf(value.slice(clampedCursor));
         updateValue(value.slice(0, clampedCursor), clampedCursor);
+        return;
+      }
+
+      // Ctrl+V: clipboard-image fallback for terminals that don't emit a
+      // bracketed-paste event for image-only clipboards. Probe is async, so the
+      // handler returns now and updateValue happens when it resolves; capture
+      // the cursor offset so the block lands where the user pasted.
+      if (key.ctrl && input === 'v') {
+        if (onClipboardImage) {
+          const at = clampedCursor;
+          saveUndo();
+          onClipboardImage().then((injected) => {
+            if (!injected) return;
+            const cur = lastValueRef.current;
+            const pos = Math.min(at, cur.length);
+            updateValue(cur.slice(0, pos) + injected + cur.slice(pos), pos + injected.length);
+          }).catch(() => { /* best-effort */ });
+        }
         return;
       }
 

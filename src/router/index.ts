@@ -12,13 +12,20 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  DEFAULT_MODEL_CAPABILITIES as SHARED_MODEL_CAPABILITIES_BASE,
+  DEFAULT_ROUTING_CONFIG as SHARED_ROUTING_CONFIG,
+  route as routeWithSharedCore,
+  type ModelCapabilities,
+  type TaskType,
+} from '@blockrun/router-core';
 import { MODEL_PRICING, OPUS_PRICING } from '../pricing.js';
 import { BLOCKRUN_DIR } from '../config.js';
 import { detectCategory, mapCategoryToTier, type Category } from './categories.js';
 import { selectModel } from './selector.js';
 import type { LearnedWeights } from './selector.js';
 import { computeLocalElo, blendElo } from './local-elo.js';
-import { isVisionModel } from './vision.js';
+import { isVisionModel, pickVisionSibling } from './vision.js';
 
 export { isVisionModel, messageNeedsVision, messagesNeedVision, pickVisionSibling } from './vision.js';
 
@@ -55,6 +62,141 @@ export interface RoutingResult {
   signals: string[];
   savings: number;
   category?: Category;
+  /** Ordered capability-eligible recovery chain. The selected model is first. */
+  candidates?: string[];
+  /** Explainable task class produced by the shared Router core. */
+  taskType?: TaskType;
+  /** Shared Router implementation that made this decision. */
+  routerVersion?: 'v2-rules' | 'v3-portfolio' | 'franklin-legacy';
+  reasoning?: string;
+}
+
+/** Request capabilities known by the Franklin host at routing time. */
+export interface RoutingContext {
+  needsVision?: boolean;
+  maxOutputTokens?: number;
+  hasTools?: boolean;
+  toolNames?: readonly string[];
+  requiresTools?: boolean;
+  requiresStructuredOutput?: boolean;
+  systemPrompt?: string;
+  /**
+   * Extra model ids to treat as dead for this call only, on top of the
+   * process-wide set (see markModelUnavailable). Tests use this; hosts
+   * normally let the runtime observation feed the process-wide set.
+   */
+  unavailableModels?: readonly string[];
+}
+
+const SHARED_MODEL_PRICING = new Map(
+  Object.entries(MODEL_PRICING).map(([model, pricing]) => [
+    model,
+    {
+      inputPrice: pricing.input,
+      outputPrice: pricing.output,
+      ...(pricing.perCall !== undefined ? { flatPrice: pricing.perCall } : {}),
+    },
+  ]),
+);
+
+// ─── Dead-rung kill-switch ───
+//
+// router-core ships its tier chains as committed config, so a model that
+// leaves the gateway keeps its rung until a core release and a consumer
+// repin land — weeks, historically (the free/gpt-oss rungs 400'd for two
+// weeks before d7bc10c retired them). `options.unavailableModels` is the
+// core's answer: ids the host has observed dead are hard-removed from every
+// chain before selection, effective on the next request. Franklin feeds it
+// from three sources:
+//
+//   1. KNOWN_UNAVAILABLE_MODELS — ids the committed core config still
+//      references that the gateway has been observed to REJECT. Absence from
+//      GET /v1/models is NOT evidence: on 2026-08-29 every catalog-absent id
+//      the core config names (Opus 4.6, the K2.x line, the xAI 3.x / 4-0709 /
+//      4-fast family, gpt-5-nano) was probed through the binary and every one
+//      answered and was charged — the gateway hides them from the catalog
+//      but still serves them. Only add an id here after a real 400/404/410,
+//      and drop it once the core config itself stops naming it.
+//   2. QUARANTINED_MODELS — ids the catalog DOES list but Franklin refuses to
+//      route to, because the free pool answers for them with a substitute
+//      (the response's `model` field names a different model) and leaks
+//      thinking prose into content. Same "never promise a model the user
+//      doesn't get" rule the picker applies; see FREE_MODELS_BY_CATEGORY.
+//   3. Runtime observations — markModelUnavailable() is called by the agent
+//      loop when the gateway rejects a routed model id (400 "Unknown model",
+//      404, 410 — see AgentErrorInfo.modelUnavailable). Process-scoped: the
+//      next routing decision in this session never picks that id again.
+//
+// The core treats this as distinct from user-preference exclusion: a chain
+// whose every rung is dead keeps its config (the outage stays visible)
+// instead of fail-opening to something the host said is gone.
+const KNOWN_UNAVAILABLE_MODELS: readonly string[] = [
+  // Empty as of 2026-08-29 — see the probe note above. The free/gpt-oss and
+  // free/deepseek-v4-flash rungs that would have lived here were retired in
+  // the core itself (d7bc10c), which is the steady state this list waits for.
+];
+
+const QUARANTINED_MODELS: readonly string[] = [
+  // Catalogued free id; live probe 2026-08-29 answered as
+  // nvidia/nemotron-3-super-120b with the reasoning trace duplicated into
+  // `content`. The core uses it as the free backstop rung of every Auto
+  // chain — Franklin's chains end one rung earlier instead.
+  'nvidia/step-3.7-flash',
+];
+
+const observedUnavailable = new Set<string>();
+
+/**
+ * Record that the gateway rejected a model id outright (400 "Unknown model",
+ * 404, 410). Every later routing decision in this process removes it from
+ * the shared Router's chains. Idempotent; returns true the first time.
+ */
+export function markModelUnavailable(model: string | undefined | null): boolean {
+  if (!model || observedUnavailable.has(model)) return false;
+  observedUnavailable.add(model);
+  return true;
+}
+
+/** Ids the shared Router must not select: static, quarantined, and observed. */
+export function getUnavailableModels(extra?: readonly string[]): string[] {
+  return [...new Set([
+    ...KNOWN_UNAVAILABLE_MODELS,
+    ...QUARANTINED_MODELS,
+    ...observedUnavailable,
+    ...(extra ?? []),
+  ])];
+}
+
+export function isModelUnavailable(model: string | undefined | null): boolean {
+  if (!model) return false;
+  return observedUnavailable.has(model)
+    || KNOWN_UNAVAILABLE_MODELS.includes(model)
+    || QUARANTINED_MODELS.includes(model);
+}
+
+/** Test hook: forget runtime observations (the static lists stay). */
+export function resetUnavailableModels(): void {
+  observedUnavailable.clear();
+}
+
+// The core's capability snapshot decides vision eligibility inside the
+// portfolio, but it lags the catalog (36 gateway chat ids have no entry as of
+// 2026-08-29, and it disagrees with Franklin's allowlist on gpt-5-mini / o3 /
+// grok-4-0709, all of which accept images). Franklin's allowlist in vision.ts
+// is the maintained source, so its verdict overrides `supportsVision` on
+// every entry the core knows. Ids the core does not know fail OPEN inside
+// the core (`isEligible` returns true) — that gap is closed by the
+// post-selection guard in routeRequest, not by inventing context/output
+// numbers here that would silently change eligibility.
+const SHARED_MODEL_CAPABILITIES: Readonly<Record<string, ModelCapabilities>> = Object.fromEntries(
+  Object.entries(SHARED_MODEL_CAPABILITIES_BASE).map(([id, caps]) => [
+    id,
+    { ...caps, supportsVision: isVisionModel(id) },
+  ]),
+);
+
+function normalizeRoutingContext(context: boolean | RoutingContext): RoutingContext {
+  return typeof context === 'boolean' ? { needsVision: context } : context;
 }
 
 // ─── Tier Model Configs ───
@@ -69,7 +211,10 @@ export interface RoutingResult {
 const AUTO_TIERS: Record<Tier, { primary: string; fallback: string[] }> = {
   SIMPLE: {
     primary: 'deepseek/deepseek-v4-pro',
-    fallback: ['google/gemini-2.5-flash', 'moonshot/kimi-k2.6', 'deepseek/deepseek-chat'],
+    // Cheap-tier fallbacks only. Kimi dropped here 2026-07: the K2.x line was
+    // retired and its replacement K3 is premium-priced ($3/$15) — it doesn't
+    // belong in a cost-saving fallback chain.
+    fallback: ['google/gemini-2.5-flash', 'deepseek/deepseek-chat'],
   },
   MEDIUM: {
     primary: 'deepseek/deepseek-v4-pro',
@@ -79,19 +224,20 @@ const AUTO_TIERS: Record<Tier, { primary: string; fallback: string[] }> = {
     // Hard tasks — multi-file refactors, ambiguous specs, dense reasoning
     // chains — still go to Opus. V4 Pro is great but not a Sonnet/Opus
     // replacement at the high end of difficulty per recent agent-bench runs.
-    primary: 'anthropic/claude-opus-4.8',
-    fallback: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5', 'anthropic/claude-sonnet-4.6', 'deepseek/deepseek-v4-pro'],
+    primary: 'anthropic/claude-opus-5',
+    fallback: ['anthropic/claude-opus-4.8', 'openai/gpt-5.5', 'anthropic/claude-sonnet-4.6', 'deepseek/deepseek-v4-pro'],
   },
   REASONING: {
-    // Opus 4.8: current Anthropic flagship — strongest agentic coding +
-    // reasoning. 4.7 then 4.6 stay in the fallback chain in case of rollout
-    // delays at the gateway edge.
-    primary: 'anthropic/claude-opus-4.8',
+    // Opus 5: latest flagship, most capable for agentic coding, same $5/$25 as
+    // the 4.x Opus line. 4.8 and 4.7 stay in the fallback chain in case of
+    // rollout delays.
+    primary: 'anthropic/claude-opus-5',
     fallback: [
+      'anthropic/claude-opus-4.8',
       'anthropic/claude-opus-4.7',
-      'anthropic/claude-opus-4.6',
       'openai/o3',
       'deepseek/deepseek-v4-pro',
+      // Hidden from /v1/models but still served (probed 2026-08-29).
       'xai/grok-4-1-fast-reasoning',
       'deepseek/deepseek-reasoner',
     ],
@@ -373,10 +519,23 @@ function classicRouteRequest(
 //     that can't be async (proxy, LLM-client bootstrap) keep using the sync
 //     `routeRequest`, which silently does keyword-only routing.
 
-// llama-4-maverick: clean one-word classification output. glm-4.7 + qwen-
-// thinking emit reasoning into thinking blocks and leave text empty under
-// tight max_tokens — fine for chat, wrong shape for single-word dispatch.
-const CLASSIFIER_MODEL = process.env.FRANKLIN_ROUTER_MODEL || 'nvidia/llama-4-maverick';
+// The classifier needs a free model that answers with ONE BARE WORD under a
+// tight max_tokens. That is a narrower requirement than "is a good free chat
+// model", and most of the free pool fails it by streaming chain-of-thought
+// into `content` (glm-4.7 and the qwen-thinking builds emit reasoning and
+// leave text empty; nemotron-nano-9b-v2 opens with "Okay, let's see. The user
+// wants to…" and never reaches a verdict inside the budget).
+//
+// 2026-08-19: the previous default, nvidia/qwen3-next-80b-a3b-instruct, was
+// EOL'd by NVIDIA (410 on 2026-07-27) — the gateway now rides its calls on
+// nemotron-3-super-120b, which leaks prose. Every classification has been
+// failing the strict parse and falling through to keyword-only routing ever
+// since, silently, because the fallback is by design invisible.
+//
+// nemotron-3-nano-omni is the replacement: live-probed on this exact prompt
+// shape it returns "MEDIUM" and nothing else, and it verifiably serves itself
+// rather than riding a pooled substitute.
+const CLASSIFIER_MODEL = process.env.FRANKLIN_ROUTER_MODEL || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning';
 const CLASSIFIER_TIMEOUT_MS = 2_500;
 
 const CLASSIFIER_SYSTEM = `You classify a user's message into ONE routing tier for a CLI agent. Reply with EXACTLY ONE WORD from the allowed set. No explanation, no punctuation, no quotes.
@@ -454,23 +613,27 @@ export async function llmClassifyRequest(prompt: string): Promise<Tier | null> {
 }
 
 /**
- * Async router — LLM classifier first, keyword classifier as fallback.
- * Profile-specific tier tables (AUTO / ECO / PREMIUM / FREE) still pick
- * the concrete model; the classifier only picks the TIER.
+ * Compatibility async router. Production Auto routing is local and delegates
+ * directly to the shared Router core, so it adds no classifier round trip.
+ * Tests and third-party integrations may still inject an explicit classifier;
+ * that legacy path remains available during the migration window.
  */
 export async function routeRequestAsync(
   prompt: string,
   profile: RoutingProfile = 'auto',
-  classify: TierClassifier = llmClassifyRequest,
-  needsVision = false,
+  classify?: TierClassifier,
+  context: boolean | RoutingContext = false,
 ): Promise<RoutingResult> {
-  // Free / short-circuit profiles — no classifier needed.
-  if (profile === 'free') return routeRequest(prompt, profile, needsVision);
+  // The production path intentionally has no extra model call. Keeping the
+  // function async avoids breaking existing callers while removing router
+  // latency and classifier spend.
+  if (!classify || profile === 'free') return routeRequest(prompt, profile, context);
+
+  const normalizedContext = normalizeRoutingContext(context);
 
   const tier = await classify(prompt).catch(() => null);
   if (!tier) {
-    // Classifier miss or disabled — fall through to the sync keyword router.
-    return routeRequest(prompt, profile, needsVision);
+    return routeRequest(prompt, profile, normalizedContext);
   }
 
   // Build a RoutingResult from the LLM-picked tier using the same tier
@@ -478,7 +641,7 @@ export async function routeRequestAsync(
   let model: string;
   let finalTier: Tier = tier;
   const signals: string[] = ['llm-classified'];
-  if (needsVision) {
+  if (normalizedContext.needsVision) {
     const v = pickVisionTierModel(tier);
     model = v.model;
     finalTier = v.tier;
@@ -512,17 +675,15 @@ export function resolveTierToModel(
   needsVision = false,
 ): RoutingResult {
   // Free profile short-circuits — everything routes to a single free model.
-  // qwen3-coder-480b is text-only; on a vision turn the free profile can't
-  // help us. Caller should detect this and warn the user that Free won't
-  // handle images — for now we just return the free pick and let the model
-  // fail gracefully. (Open question: should we hard-fall to nvidia/llama-4-
-  // maverick here? Skipped until we see a real user hit this path.)
+  // Vision turns go to nemotron-nano-12b-v2-vl: the one vision-capable free
+  // model that verifiably serves itself (the 30B omni line is pooled onto a
+  // text-only substitute upstream, verified live 2026-08-12).
   if (profile === 'free') {
     return {
-      model: 'nvidia/qwen3-coder-480b',
+      model: needsVision ? 'nvidia/nemotron-nano-12b-v2-vl' : 'nvidia/nemotron-nano-9b-v2',
       tier: 'SIMPLE',
       confidence: 1.0,
-      signals: needsVision ? ['free-profile', 'vision-unsupported'] : ['free-profile'],
+      signals: needsVision ? ['free-profile', 'free-vision'] : ['free-profile'],
       savings: 1.0,
     };
   }
@@ -551,25 +712,91 @@ export function resolveTierToModel(
 export function routeRequest(
   prompt: string,
   profile: RoutingProfile = 'auto',
-  needsVision = false,
+  context: boolean | RoutingContext = false,
 ): RoutingResult {
-  // Free profile — always use free model
+  const normalizedContext = normalizeRoutingContext(context);
+
+  // Free profile — always use free model (vision turns get the free VL model;
+  // see resolveTierToModel for the rationale).
   if (profile === 'free') {
     return {
-      model: 'nvidia/qwen3-coder-480b',
+      model: normalizedContext.needsVision ? 'nvidia/nemotron-nano-12b-v2-vl' : 'nvidia/nemotron-nano-9b-v2',
       tier: 'SIMPLE',
       confidence: 1.0,
-      signals: needsVision ? ['free-profile', 'vision-unsupported'] : ['free-profile'],
+      signals: normalizedContext.needsVision ? ['free-profile', 'free-vision'] : ['free-profile'],
       savings: 1.0,
+      candidates: FREE_MODELS_BY_CATEGORY.chat,
     };
   }
 
-  // Auto profile bypasses learned routing. The learned Elo scores grow with
-  // usage volume rather than pure quality, which biased the router toward
-  // cheap/weak models on agentic work. Classic AUTO_TIERS defaults are
-  // agent-tuned (Sonnet-tier backbone) and more predictable for users.
+  // Emergency rollback for operators. This keeps the former Franklin rules
+  // available without making them the default or mixing their Elo state into
+  // the shared Router decision.
+  if (process.env.FRANKLIN_ROUTER_STRATEGY === 'legacy') {
+    return {
+      ...classicRouteRequest(prompt, profile, normalizedContext.needsVision),
+      routerVersion: 'franklin-legacy',
+    };
+  }
+
+  // Auto now uses the same local, deterministic Router core as ClawRouter.
+  // Hard capability requirements filter candidates before portfolio scoring;
+  // no network request, wallet access, benchmark grader or settlement adapter
+  // runs in this path.
   if (profile === 'auto') {
-    return classicRouteRequest(prompt, profile, needsVision);
+    const toolNames = normalizedContext.toolNames ?? [];
+    const decision = routeWithSharedCore(
+      prompt,
+      normalizedContext.systemPrompt,
+      Math.max(1, normalizedContext.maxOutputTokens ?? 4_096),
+      {
+        config: {
+          ...SHARED_ROUTING_CONFIG,
+          strategy: process.env.FRANKLIN_ROUTER_STRATEGY === 'rules' ? 'rules' : 'portfolio',
+        },
+        modelPricing: SHARED_MODEL_PRICING,
+        modelCapabilities: SHARED_MODEL_CAPABILITIES,
+        routingProfile: 'auto',
+        hasTools: normalizedContext.hasTools ?? toolNames.length > 0,
+        toolCount: toolNames.length,
+        toolNames,
+        ...(normalizedContext.requiresTools !== undefined
+          ? { requiresTools: normalizedContext.requiresTools }
+          : {}),
+        hasVision: normalizedContext.needsVision ?? false,
+        requiresStructuredOutput: normalizedContext.requiresStructuredOutput ?? false,
+        unavailableModels: getUnavailableModels(normalizedContext.unavailableModels),
+      },
+    );
+    const category = detectCategory(prompt, loadLearnedWeights()?.category_keywords).category;
+    let model = decision.model;
+    let candidates = decision.candidates ?? [decision.model];
+    const signals: string[] = [decision.routerVersion ?? decision.method, ...(decision.taskType ? [decision.taskType] : [])];
+    // Vision is a hard requirement, and the core fails open for any id
+    // missing from its capability snapshot (see SHARED_MODEL_CAPABILITIES).
+    // Before this guard an image turn could land on a text-only model the
+    // core simply had no opinion about — zai/glm-5.2 sits in the long-context
+    // evidence list, for instance — and the model would then hallucinate
+    // from the `Image file: <path>` stub. Walk the core's own recovery chain
+    // for the first model that can see; fall back to the family sibling.
+    if (normalizedContext.needsVision && !isVisionModel(model)) {
+      const sighted = candidates.filter(isVisionModel);
+      model = sighted[0] ?? pickVisionSibling(model);
+      candidates = sighted.length > 0 ? sighted : [model];
+      signals.push('vision-required');
+    }
+    return {
+      model,
+      tier: decision.tier,
+      confidence: decision.confidence,
+      signals,
+      savings: model === decision.model ? decision.savings : computeSavings(model),
+      category,
+      candidates,
+      taskType: decision.taskType,
+      routerVersion: decision.routerVersion,
+      reasoning: decision.reasoning,
+    };
   }
 
   // ── Learned routing (if weights available) ──
@@ -602,7 +829,7 @@ export function routeRequest(
       // the turn needs vision, swap to the tier's first vision-capable model.
       // We deliberately don't blend Elo with vision capability — vision is a
       // hard requirement, not a quality dimension.
-      if (needsVision && !isVisionModel(selected.model)) {
+      if (normalizedContext.needsVision && !isVisionModel(selected.model)) {
         const v = pickVisionTierModel(tier);
         return {
           model: v.model,
@@ -627,7 +854,7 @@ export function routeRequest(
   }
 
   // ── Classic routing (keyword-based fallback) ──
-  return classicRouteRequest(prompt, profile, needsVision);
+  return classicRouteRequest(prompt, profile, normalizedContext.needsVision);
 }
 
 function computeSavings(model: string): number {
@@ -658,28 +885,56 @@ export function getFallbackChain(
 // to keep the user moving without waiting for funding.
 //
 // The lists are ordered: best-fit free model first, then degraded fallbacks.
-// Coding goes to qwen3-coder; everything else (chat / trading / research /
-// reasoning / creative) prefers general-purpose free models that aren't
-// coder-tuned. Without this split, a BTC question that exhausted paid
-// models was being handed to qwen3-coder-480b — a coder model trying to
-// do technical analysis. Reported 2026-05-03 with a markets question
-// routed to a coder model on Sonnet failure.
+// llama-4-maverick leads every category — it's the only reliably-healthy free
+// model and covers chat / coding / reasoning. deepseek-v4-flash (1M ctx) is the
+// secondary; it occasionally times out on the NVIDIA NIM upstream, so it sits
+// behind maverick rather than leading.
 // 2026-06-07: nvidia/glm-4.7 dropped from every chain — NVIDIA NIM hung, the
-// gateway redirects it to qwen3-coder-480b (already present here), so routing to
-// it just wasted a slot and mislabeled the model. qwen3-coder-480b + llama-4-
-// maverick are both healthy and cover all categories.
+// gateway redirected it to a now-dead model, so routing to it just wasted a slot.
+// 2026-07-11: nvidia/deepseek-v4-flash removed — the gateway no longer serves
+// it (410). Free tier is now led by nvidia/qwen3-next-80b-a3b-instruct (cleanest
+// free instruction-follower — no thinking leak / markdown fences, verified live).
+// 2026-07-14: nvidia/llama-4-maverick replaced by nvidia/mistral-nemotron as the
+// different-family fallback. Maverick left the gateway catalog, and the free
+// pool silently substitutes for it — a live probe showed both maverick and
+// qwen3-next answering as `nvidia/nemotron-3-super-120b-a12b-free`. Two chain
+// entries backed by the same pooled model is fake resilience: the fallback
+// couldn't rescue a turn the primary had already failed. mistral-nemotron
+// verifiably serves itself, so the chain is genuinely two families again.
+// 2026-08-12: nvidia/qwen3-next-80b-a3b-instruct removed — NVIDIA EOL'd it
+// (410 on 2026-07-27; the gateway hid it and rides its calls on a fallback).
+// nemotron-nano-9b-v2 promoted to lead: it is the only free text model that
+// verifiably serves ITSELF on the streaming path Franklin uses (verified live
+// through the binary today). mistral-nemotron is DEGRADED at NVIDIA — stream
+// calls 400 ("DEGRADED function cannot be invoked") and non-stream calls ride
+// the gateway's disclosed fallback.
+// 2026-08-19: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning promoted to
+// second. When it was last probed it came back served as gpt-oss-120b — the
+// pooled-substitute trap this comment warns about — but NVIDIA has since
+// fixed it: it now answers as ITSELF on both the streaming and non-streaming
+// paths, and it returns clean single-word output under tight max_tokens (it
+// is also the router's classifier for that reason). mistral-nemotron drops to
+// third: still DEGRADED at NVIDIA, kept as a genuinely different family for
+// the case where both Nemotron nano builds are down. The catalog's fifth free
+// id, step-3.7-flash, stays out of every chain — it leaks thinking prose into
+// content AND comes back served by nemotron-3-super-120b (re-probed
+// 2026-08-29, unchanged). It is also QUARANTINED for the shared Router above,
+// which would otherwise use it as the free backstop rung of every Auto chain.
+const OMNI = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning';
+
 const FREE_MODELS_BY_CATEGORY: Record<Category, string[]> = {
-  coding:    ['nvidia/qwen3-coder-480b', 'nvidia/llama-4-maverick'],
-  trading:   ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
-  research:  ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
-  reasoning: ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
-  chat:      ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
-  creative:  ['nvidia/llama-4-maverick', 'nvidia/qwen3-coder-480b'],
+  coding:    ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
+  trading:   ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
+  research:  ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
+  reasoning: ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
+  chat:      ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
+  creative:  ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
 };
 
 const DEFAULT_FREE_CHAIN: string[] = [
-  'nvidia/llama-4-maverick',
-  'nvidia/qwen3-coder-480b',
+  'nvidia/nemotron-nano-9b-v2',
+  OMNI,
+  'nvidia/mistral-nemotron',
 ];
 
 /**

@@ -103,7 +103,10 @@ const SAFE_COMMANDS = new Set([
   'pwd', 'realpath', 'dirname', 'basename',
   // Text processing (read-only when not redirecting)
   'jq', 'yq', 'sort', 'uniq', 'cut', 'tr', 'diff', 'comm', 'less', 'more',
-  'wc', 'tee', 'xargs',
+  'wc',
+  // NB: `xargs` and `tee` are intentionally NOT here — xargs executes an
+  // arbitrary wrapped command (`... | xargs rm -f`) and tee WRITES files
+  // (`echo evil | tee ~/.zshrc`), so neither may auto-approve as "safe".
 ]);
 
 const SAFE_GIT_SUBCOMMANDS = new Set([
@@ -123,6 +126,14 @@ const SAFE_CARGO_SUBCOMMANDS = new Set([
   'fmt', 'tree', 'metadata', 'verify-project',
 ]);
 
+// Env vars that may be stripped as a benign command PREFIX (`LANG=C ls`). These
+// only affect locale/display — none change code loading, library injection, or
+// interpreter behavior. Anything NOT on this list (BASH_ENV, LD_PRELOAD,
+// DYLD_INSERT_LIBRARIES, PERL5OPT, NODE_OPTIONS, PATH, IFS, a custom var, …) is
+// treated as an execution-hijack risk and forces a prompt.
+const BENIGN_ENV_PREFIXES =
+  /^(?:LANG|LANGUAGE|LC_[A-Z]+|TZ|TERM|COLUMNS|LINES|NO_COLOR|FORCE_COLOR|CLICOLOR|CLICOLOR_FORCE|GREP_COLOR|GREP_COLORS)$/;
+
 // ─── Classifier ──────────────────────────────────────────────────────────
 
 export function classifyBashRisk(command: string): BashRiskResult {
@@ -133,8 +144,13 @@ export function classifyBashRisk(command: string): BashRiskResult {
     }
   }
 
-  // 2. Check if every segment is a known-safe command
-  const segments = command.split(/\s*(?:&&|\|\||[;|])\s*/);
+  // 2. Check if every segment is a known-safe command. Split on ALL bash
+  // command separators — &&, ||, ;, |, a lone & (background), and newline/CR —
+  // so an injected second command (`pwd\nnpm install evil`, `pwd & node x`) is
+  // classified on its own rather than hiding behind a benign first word. (`&&`
+  // is matched before the lone `&`; numeric fd dups like `2>&1` have no
+  // standalone `&` and are handled per-segment by the redirect check.)
+  const segments = command.split(/\s*(?:&&|\|\||[;|]|(?<![>&])&(?![&>])|[\n\r])\s*/);
   let allSafe = true;
 
   for (const segment of segments) {
@@ -155,8 +171,111 @@ export function classifyBashRisk(command: string): BashRiskResult {
 }
 
 function isSegmentSafe(segment: string): boolean {
-  // Parse: strip env vars, extract command and args
-  const words = segment.split(/\s+/).filter(w => !w.includes('='));
+  // The shell strips quotes and backslash-escapes BEFORE opening a path, so a
+  // sensitive filename can be spliced to dodge a literal regex: `.block''run`,
+  // `.block"run"`, `'.blockrun'`, `.\blockrun` all resolve to `.blockrun` at the
+  // OS but read as non-contiguous text to a regex. Match the DENY patterns below
+  // against a normalized copy that mimics the shell's quote/escape removal, so no
+  // quoting arrangement of a wallet/secret path can reach 'safe'. (Over-matching
+  // here only ever prompts — it never blocks.)
+  const norm = segment.replace(/\\(.)/g, '$1').replace(/['"]/g, '');
+  // Brace expansion (`.bloc{k,}run`, `{~,}/...`, `.bloc{j..l}run`) is a 4th
+  // obfuscation primitive — the shell rewrites it to other words before opening
+  // the path, so `.blockrun`/basename literals read as non-contiguous text. Drop
+  // the brace metachars so the deny regexes below see the collapsed first word.
+  const debraced = norm.replace(/[{},]/g, '');
+
+  // Never auto-approve a command that touches the wallet key store. Matching the
+  // FILENAME is hopeless — it's trivially obfuscated. So match the DIRECTORY: any
+  // reference to ~/.blockrun forces a prompt. (The file Read/Write/Edit tools
+  // have a separate canonicalized guard; this is the best-effort net for the shell.)
+  if (/\.blockrun/i.test(norm) || /\.blockrun/i.test(debraced)) {
+    return false;
+  }
+  // Relative reads with no `.blockrun` in the text (e.g. the cwd is the wallet
+  // dir): match the known key/secret basenames broadly (any *wallet*.json/.key).
+  const keyBasename = /(?<![\w-])(?:\.solana-session(?:-key2)?|\.session|[\w-]*wallet[\w-]*\.(?:json|key))(?![\w-])/i;
+  if (keyBasename.test(norm) || keyBasename.test(debraced)) {
+    return false;
+  }
+  // Command/process substitution runs an arbitrary INNER command the classifier
+  // can't see (`echo $(node evil)`, `cat <(touch x)`) — never safe.
+  if (/\$\(|`|<\(|>\(/.test(segment)) {
+    return false;
+  }
+  // ANSI-C (`$'\x6e'`) and locale (`$"..."`) quoting decode/expand to text the
+  // classifier can't resolve — and which the dequote pass above can't statically
+  // evaluate (`~/.blockru$'\x6e'/.session` → `~/.blockrun/.session`). Match it as
+  // an OPENING quote (at a token boundary) or by its tell-tale escape (`$'\`), so
+  // a `grep 'foo$'` regex anchor — a `$` before a CLOSING quote — is left safe.
+  if (/(?:^|[\s=(:,])\$['"]|\$['"]\\/.test(segment)) {
+    return false;
+  }
+  // Parameter expansion (`$VAR`, `${VAR}`) expands to text the classifier also
+  // can't see, so a bare `$HOME` glob can reach the wallet store exactly like
+  // `$(...)` — `cat $HOME/.bl*/.s*` evaded the rooted-glob guard below because it
+  // starts with `$`, not `~`/`.`/`/`. Treat any `$NAME` / `${NAME}` as opaque.
+  // (`$` followed by a non-name char — e.g. a `grep 'foo$'` regex anchor, `$?`,
+  // `$5` — is left alone so common read commands still auto-approve.)
+  if (/\$\{?[A-Za-z_]/.test(segment)) {
+    return false;
+  }
+  // Brace expansion with a comma list (`{a,b}`) or `..` range (`{0..9}`) fabricates
+  // words/paths the classifier can't statically follow — `cat {~,}/.bloc{k,}run/...`
+  // reaches the wallet store while every char-literal guard misses. Treat any such
+  // group as opaque, like `$VAR`/`$(...)`. (A brace with NO comma/`..` — `{x}`, or
+  // an fd-dup `2>&1` — does not expand, so it stays safe.)
+  if (/\{[^{}]*(?:,|\.\.)[^{}]*\}/.test(segment)) {
+    return false;
+  }
+  // A glob/brace in an explicit PATH (a token rooted at ~, ., or /) expands AFTER
+  // this guard and can reach the wallet store (`cat ~/.b*/.s*`) or a sensitive
+  // file. Bare cwd globs (`*.md`, `src/*.ts`) have no such prefix and stay safe.
+  if (/(?:^|\s)(?:~|\.|\/)\S*[*?[{]/.test(norm)) {
+    return false;
+  }
+  // Output redirection to a FILE target is a write — block it for EVERY segment,
+  // not just SAFE_COMMANDS ones. git/npm/cargo/bun resolve through their own
+  // branches below and used to skip the redirect check, so `git status > ~/.bashrc`
+  // (overwrite a shell rc → RCE on next shell) and `npm test > attack.sh`
+  // auto-approved. Allows numeric fd dups (`2>&1`, `>&2` — a digit follows `>`).
+  if (/>[>|&]?\s*[^\s&|0-9]/.test(segment)) {
+    return false;
+  }
+  // Reading host credential stores should PROMPT — mirror the Write tool's
+  // dangerous-path block so `cat ~/.ssh/id_rsa`, `cat ~/.aws/credentials`,
+  // `cat ~/.gnupg/secring.gpg`, gcloud tokens, `.npmrc`/`.pgpass`/`.netrc`, and
+  // docker registry creds don't auto-approve secrets into model context.
+  if (/(?:^|[\s/~=])\.(?:ssh|aws|gnupg|kube)(?:\/|$|\s)/i.test(norm)) return false;
+  if (/\bid_(?:rsa|dsa|ecdsa|ed25519)\b/i.test(norm)) return false;
+  if (/(?:^|[\s/~=])\.(?:npmrc|pgpass|netrc)(?:$|\s)/i.test(norm)) return false;
+  if (/gcloud\/(?:credentials|access_tokens|application_default)|\.docker\/config/i.test(norm)) return false;
+  // Other plaintext credential / key stores a bare `cat` would dump into context.
+  // Denylists lag the real set of secret files, so be generous — over-prompting
+  // is safe. Includes the Solana CLI default keypair (`~/.config/solana/id.json`),
+  // a SPENDABLE wallet that lives outside Franklin's own ~/.blockrun store.
+  if (/(?:^|[\s/~=])\.git-credentials(?:$|\s)/i.test(norm)) return false;
+  if (/(?:^|[\s/~=])\.(?:bash|zsh|sh|python|node_repl|mysql|psql|irb)_history(?:$|\s)/i.test(norm)) return false;
+  if (/(?:git|gh)\/(?:credentials|hosts\.ya?ml|hosts\.json)\b/i.test(norm)) return false;
+  if (/\.cargo\/credentials|rclone\/rclone\.conf|(?:^|[\s/~=])\.config\/solana(?:\/|\b)|solana\/id\.json/i.test(norm)) return false;
+  if (/(?:keychain(?:-db)?|\.keychain)\b|\bKeychains\/|\blogins\.json\b/i.test(norm)) return false;
+
+  // Parse into words. An env-assignment PREFIX (`FOO=bar cmd …`) is a real
+  // assignment only in the LEADING run before the command word — a later `x=y`
+  // is just an argument (`grep x=y file`). Walk the leading run: reject the
+  // segment if any assignment names a code-loading / execution-hijack var, so a
+  // benign-looking base command can't smuggle one (`BASH_ENV=./rc ls`,
+  // `LD_PRELOAD=/x.so cat f`). Only locale/display vars strip silently.
+  const rawWords = segment.split(/\s+/).filter(Boolean);
+  let envPrefixCount = 0;
+  for (const w of rawWords) {
+    const eq = w.indexOf('=');
+    // Stop at the first token that isn't a `NAME=value` assignment — that's the command.
+    if (eq <= 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(w.slice(0, eq))) break;
+    if (!BENIGN_ENV_PREFIXES.test(w.slice(0, eq).toUpperCase())) return false;
+    envPrefixCount++;
+  }
+  const words = rawWords.slice(envPrefixCount);
   let idx = 0;
   let cmd = words[idx] || '';
 
@@ -174,7 +293,36 @@ function isSegmentSafe(segment: string): boolean {
 
   // git
   if (baseName === 'git') {
-    return SAFE_GIT_SUBCOMMANDS.has(subCmd);
+    if (!SAFE_GIT_SUBCOMMANDS.has(subCmd)) return false;
+    // `config` is read-only ONLY in get/list form. A bare `git config key value`
+    // WRITES — and `--global` escapes the repo to plant an exec hook via
+    // core.pager/core.editor/alias.x (`git config core.pager "node evil.js"`).
+    // Count positional args after `config`: 2+ (key + value) is a write; explicit
+    // write flags (--add/--unset/…) also force a prompt.
+    if (subCmd === 'config') {
+      const cfgPositionals = segment
+        .replace(/^[^]*?\bconfig\b/, '')
+        .split(/\s+/)
+        .filter((w) => w && !w.startsWith('-'));
+      const writeFlag = /(?:^|\s)--(?:add|unset(?:-all)?|replace-all|remove-section|rename-section|edit|set)\b/.test(segment);
+      if (cfgPositionals.length >= 2 || writeFlag) return false;
+    }
+    // `git remote add/set-url/remove/rename/…` mutate remotes (can point at an
+    // attacker repo). Only the read forms (`git remote`, `git remote -v`) are safe.
+    if (subCmd === 'remote' && /(?:^|\s)(?:add|set-url|set-head|set-branches|remove|rm|rename|prune|update)\b/.test(segment)) {
+      return false;
+    }
+    // `branch`/`tag` read by default, but their delete/rename/copy/force flags
+    // silently mutate refs (lose local commits). `branch -D` is already a
+    // dangerous-pattern; gate the rest (incl. lowercase `-d`, `-m`, `-f`) here.
+    // Creating a branch/tag (a bare positional) stays safe — only ref destruction prompts.
+    if (subCmd === 'branch' && /(?:^|\s)-(?:d|D|m|M|c|C|f)\b|(?:^|\s)--(?:delete|move|copy|force|unset-upstream)\b/.test(segment)) {
+      return false;
+    }
+    if (subCmd === 'tag' && /(?:^|\s)-(?:d|f)\b|(?:^|\s)--(?:delete|force)\b/.test(segment)) {
+      return false;
+    }
+    return true;
   }
 
   // npm / yarn / pnpm / bun / npx
@@ -189,15 +337,40 @@ function isSegmentSafe(segment: string): boolean {
     return SAFE_CARGO_SUBCOMMANDS.has(subCmd);
   }
 
-  // rtk (RTK wrapper — safe, it's a proxy)
-  if (baseName === 'rtk') return true;
+  // rtk is a command REWRITER/executor, not a leaf command: `rtk <cmd>` runs
+  // <cmd> (e.g. `rtk git status`), and `rtk proxy <cmd>` runs it unfiltered. So
+  // its safety equals the WRAPPED command's — a blanket allow turned it into a
+  // wildcard exec hole (`rtk node evil.js` auto-approved RCE). Strip the `rtk`
+  // token (and a `proxy` passthrough) and recurse, like the time/nice prefix.
+  // Read-only meta-subcommands (gain/discover/version) stay safe.
+  if (baseName === 'rtk') {
+    const next = words[argIdx] || '';
+    if (next === '' || next === 'gain' || next === 'discover' || /^-/.test(next)) return true;
+    const restWords = words.slice(next === 'proxy' ? argIdx + 1 : argIdx);
+    const rest = restWords.join(' ').trim();
+    if (!rest) return true;
+    return isSegmentSafe(rest);
+  }
+
+  // `find` is read-only EXCEPT its action predicates, which execute arbitrary
+  // commands or delete files (`find / -name id_rsa -exec cat {} +`, `find . -delete`).
+  // Same arbitrary-exec hazard that excludes xargs — force a prompt.
+  if (baseName === 'find' && /(?:^|\s)-(?:exec|execdir|ok|okdir|delete|fprint|fprintf|fls)\b/.test(segment)) {
+    return false;
+  }
 
   // Known safe base command
   if (SAFE_COMMANDS.has(baseName)) {
     // sed -i is not read-only
     if (baseName === 'sed' && segment.includes(' -i')) return false;
-    // Output redirection means writing — not safe
-    if (/>\s*[^&|]/.test(segment)) return false;
+    // (Output redirection is now blocked for every segment near the top of this
+    // function, so the per-command redirect check that used to live here is gone.)
+    // Coreutils with a hidden write mode the redirect check can't see:
+    if ((baseName === 'sort' || baseName === 'uniq' || baseName === 'tree') && /(?:^|\s)(?:-o(?:[=\s]|$)|--output\b)/.test(segment)) return false;
+    // `uniq IN OUT` overwrites the 2nd positional file.
+    if (baseName === 'uniq' && words.slice(argIdx).filter((w) => w && !w.startsWith('-')).length >= 2) return false;
+    // `yq -i` / `jq` in-place edits.
+    if ((baseName === 'yq' || baseName === 'jq') && /(?:^|\s)(?:-i\b|--in-?place\b)/.test(segment)) return false;
     return true;
   }
 
@@ -209,7 +382,20 @@ function isSegmentSafe(segment: string): boolean {
   if (baseName === 'gh') {
     const ghAction = words.slice(argIdx, argIdx + 2).join(' ');
     if (/^(pr|issue|repo|release|run)\s+(view|list|status|diff|checks|comments)/.test(ghAction)) return true;
-    if (subCmd === 'api') return true; // gh api is read-only (GET)
+    // `gh api` DEFAULTS to GET (read-only) but `-X/--method` and write-body
+    // flags (-f/-F/--field/--input) make it a mutation (delete repo, merge PR,
+    // etc.). Match the flag in EVERY form gh accepts — `-X POST`, `-XDELETE`,
+    // `--method=POST`, `-ftitle=v`, `-f k=v` — and auto-approve only when none
+    // is present (a plain GET). The space-only regex was bypassable with `=` /
+    // glued forms.
+    if (subCmd === 'api') {
+      if (/(?:^|\s)-X/.test(segment)) return false;                       // -X POST / -XPOST / -XDELETE
+      if (/(?:^|\s)--method\b/i.test(segment)) return false;             // --method POST / --method=POST
+      if (/(?:^|\s)-[fF][A-Za-z0-9_]*=/.test(segment)) return false;     // -ffield=val (glued)
+      if (/(?:^|\s)-[fF](?:\s|$)/.test(segment)) return false;          // -f / -F (spaced value)
+      if (/(?:^|\s)--(?:field|raw-field|input)\b/.test(segment)) return false;
+      return true;
+    }
     if (subCmd === 'auth' && words[argIdx + 1] === 'status') return true;
     return false;
   }

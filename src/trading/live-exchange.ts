@@ -7,15 +7,18 @@
  *
  * A future commit will add a `RealExchange` that actually routes orders
  * through Coinbase/Kraken; it plugs into the same ExchangeClient contract
- * here. Keep this seam clean: the agent loop, risk engine, and portfolio
- * math never need to know whether they're in paper or live mode.
+ * (src/trading/exchange.ts). Keep this seam clean: the agent loop, risk
+ * engine, and portfolio math never need to know whether they're in paper or
+ * live mode.
  *
  * Pricing is injected (not imported directly from `./data.js`) so tests
  * can validate behavior without hitting CoinGecko.
  */
 
-import type { ExchangeClient } from './mock-exchange.js';
-import type { Fill, Side } from './portfolio.js';
+import type { ExchangeClient, ExchangeOrder } from './exchange.js';
+import type { Fill } from './portfolio.js';
+import { bpsFee, bpsFeeCeiling } from './fees.js';
+import { paperFill } from './mock-exchange.js';
 
 /** Subset of src/trading/data.ts's PriceData that we actually consume. */
 export interface PricingClientResponse {
@@ -42,7 +45,11 @@ export class LiveExchange implements ExchangeClient {
     try {
       const resp = await this.opts.pricing.getPrice(symbol.toUpperCase());
       if (typeof resp === 'string') return null;
-      if (typeof resp.price !== 'number' || !Number.isFinite(resp.price)) return null;
+      // CoinGecko reports 0 for delisted / stale coins. A zero mark is not a
+      // price: returning it would make the position unclosable (the fee math
+      // rejects a zero notional) and surface as a raw error instead of a
+      // clean "no price" block.
+      if (typeof resp.price !== 'number' || !Number.isFinite(resp.price) || resp.price <= 0) return null;
       return resp.price;
     } catch {
       // Network errors, DNS failures, etc — treat as "price unknown" rather
@@ -52,20 +59,13 @@ export class LiveExchange implements ExchangeClient {
     }
   }
 
-  async placeOrder(order: {
-    symbol: string;
-    side: Side;
-    qty: number;
-    priceUsd: number;
-  }): Promise<Fill> {
-    const notional = order.qty * order.priceUsd;
-    const feeUsd = (notional * this.opts.feeBps) / 10_000;
-    return {
-      symbol: order.symbol,
-      side: order.side,
-      qty: order.qty,
-      priceUsd: order.priceUsd,
-      feeUsd,
-    };
+  estimateFee(order: ExchangeOrder): number {
+    return bpsFeeCeiling(order, this.opts.feeBps);
+  }
+
+  async placeOrder(order: ExchangeOrder): Promise<Fill> {
+    // Paper fill: the exact bps fee is charged, which is at or below the
+    // cent-rounded ceiling estimateFee() quoted for the same order.
+    return paperFill(order, bpsFee(order, this.opts.feeBps));
   }
 }

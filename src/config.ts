@@ -26,6 +26,13 @@ export const API_URLS: Record<Chain, string> = {
 
 export const DEFAULT_PROXY_PORT = 8402;
 
+// BlockRun agent-market (the paid skill marketplace Franklin browses with
+// `/market` and hires with the agent_talent tool). It speaks standard
+// single-leg `exact` x402 on Base, so Franklin pays it with the same EVM
+// wallet it uses for the gateway. Overridable via env for local end-to-end
+// testing against a dev server.
+export const MARKET_URL = (process.env.BLOCKRUN_MARKET_URL || 'https://business.blockrun.ai').replace(/\/+$/, '');
+
 export function saveChain(chain: Chain): void {
   fs.mkdirSync(BLOCKRUN_DIR, { recursive: true });
   fs.writeFileSync(CHAIN_FILE, chain + '\n', { mode: 0o600 });
@@ -38,9 +45,18 @@ export function loadChain(): Chain {
 
   try {
     const content = fs.readFileSync(CHAIN_FILE, 'utf-8').trim();
+    if (content === 'base') return 'base';
     if (content === 'solana') return 'solana';
-    return 'base';
-  } catch {
-    return 'base';
-  }
+  } catch { /* no explicit choice on disk — fall through to the default */ }
+
+  // Default chain is Solana. Exception: a Base wallet with no Solana wallet
+  // means the user funded before the default flipped — silently moving their
+  // spending to an empty Solana wallet would strand their USDC, so keep them
+  // on Base until they choose explicitly (`franklin solana`, panel switch,
+  // setup). Pure read — every path that creates the other wallet also calls
+  // saveChain, so the heuristic is only ever the pre-choice fallback.
+  // (.session / .solana-session are the SDK's wallet key files.)
+  const hasBaseWallet = fs.existsSync(path.join(BLOCKRUN_DIR, '.session'));
+  const hasSolanaWallet = fs.existsSync(path.join(BLOCKRUN_DIR, '.solana-session'));
+  return hasBaseWallet && !hasSolanaWallet ? 'base' : 'solana';
 }

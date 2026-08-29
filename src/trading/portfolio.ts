@@ -13,6 +13,8 @@
  * Fill contract.
  */
 
+import { QTY_EPSILON, assertNumber, isPositiveFinite } from './fees.js';
+
 export type Side = 'buy' | 'sell';
 
 export interface Fill {
@@ -20,7 +22,16 @@ export interface Fill {
   side: Side;
   qty: number;
   priceUsd: number;
-  feeUsd?: number;
+  /** Fee actually charged by the venue, USD. Required: a missing fee is a bug, not $0. */
+  feeUsd: number;
+  /** Echo of the order's idempotency key when the adapter supports one. */
+  clientOrderId?: string;
+}
+
+export interface PortfolioSnapshot {
+  cashUsd: number;
+  realizedPnlUsd: number;
+  positions: Position[];
 }
 
 export interface Position {
@@ -47,7 +58,41 @@ export class Portfolio {
   private positions = new Map<string, Position>();
 
   constructor(opts: PortfolioOptions) {
+    assertNumber('starting cash', opts.startingCashUsd, 'nonNegative');
     this.cashUsd = opts.startingCashUsd;
+  }
+
+  /**
+   * Validate an untrusted snapshot (a JSON file the agent's own Write tool
+   * can edit) before it is allowed to become portfolio state. Returns the
+   * first problem found, or `null` when the shape is sound. NaN / Infinity
+   * anywhere here would silently disarm every RiskEngine cap, because a
+   * non-finite projected exposure can never exceed a cap.
+   */
+  static validateSnapshot(raw: unknown): string | null {
+    if (!raw || typeof raw !== 'object') return 'snapshot is not an object';
+    const snap = raw as Record<string, unknown>;
+    // Cash may legitimately be negative (a fill the venue delivered above the
+    // approved estimate is still booked — see TradingEngine); what it may
+    // not be is NaN or ±Infinity.
+    if (typeof snap.cashUsd !== 'number' || !Number.isFinite(snap.cashUsd)) {
+      return `Invalid cashUsd: ${String(snap.cashUsd)}`;
+    }
+    if (typeof snap.realizedPnlUsd !== 'number' || !Number.isFinite(snap.realizedPnlUsd)) {
+      return `Invalid realizedPnlUsd: ${String(snap.realizedPnlUsd)}`;
+    }
+    if (!Array.isArray(snap.positions)) return 'positions is not an array';
+    const seen = new Set<string>();
+    for (const p of snap.positions as unknown[]) {
+      if (!p || typeof p !== 'object') return 'position entry is not an object';
+      const pos = p as Record<string, unknown>;
+      if (typeof pos.symbol !== 'string' || !pos.symbol.trim()) return `Invalid position symbol: ${String(pos.symbol)}`;
+      if (seen.has(pos.symbol)) return `Duplicate position: ${pos.symbol}`;
+      seen.add(pos.symbol);
+      if (!isPositiveFinite(pos.qty)) return `Invalid ${pos.symbol} qty: ${String(pos.qty)}`;
+      if (!isPositiveFinite(pos.avgPriceUsd)) return `Invalid ${pos.symbol} avgPriceUsd: ${String(pos.avgPriceUsd)}`;
+    }
+    return null;
   }
 
   getPosition(symbol: string): Position | undefined {
@@ -59,7 +104,7 @@ export class Portfolio {
   }
 
   /** Serializable snapshot for persistence; paired with `restore()`. */
-  snapshot(): { cashUsd: number; realizedPnlUsd: number; positions: Position[] } {
+  snapshot(): PortfolioSnapshot {
     return {
       cashUsd: this.cashUsd,
       realizedPnlUsd: this.realizedPnlUsd,
@@ -68,7 +113,9 @@ export class Portfolio {
   }
 
   /** Rehydrate state from a prior snapshot; overwrites all current fields. */
-  restore(snap: { cashUsd: number; realizedPnlUsd: number; positions: Position[] }): void {
+  restore(snap: PortfolioSnapshot): void {
+    const problem = Portfolio.validateSnapshot(snap);
+    if (problem) throw new RangeError(`Refusing to restore portfolio: ${problem}`);
     this.cashUsd = snap.cashUsd;
     this.realizedPnlUsd = snap.realizedPnlUsd;
     this.positions.clear();
@@ -76,7 +123,20 @@ export class Portfolio {
   }
 
   applyFill(fill: Fill): void {
-    const fee = fill.feeUsd ?? 0;
+    // Fills arrive from adapters as runtime data, not TypeScript — validate
+    // the shape, including `side`, so a malformed fill can neither open a
+    // phantom position nor be booked as a sale by falling into an `else`.
+    if (fill.side !== 'buy' && fill.side !== 'sell') {
+      throw new RangeError(`Invalid fill side: ${String(fill.side)}`);
+    }
+    if (typeof fill.symbol !== 'string' || !fill.symbol.trim()) {
+      throw new RangeError(`Invalid fill symbol: ${String(fill.symbol)}`);
+    }
+    assertNumber('fill quantity', fill.qty, 'positive');
+    assertNumber('fill price', fill.priceUsd, 'positive');
+    assertNumber('fill fee', fill.feeUsd, 'nonNegative');
+
+    const fee = fill.feeUsd;
     const notional = fill.qty * fill.priceUsd;
 
     if (fill.side === 'buy') {
@@ -101,7 +161,7 @@ export class Portfolio {
       if (!existing) {
         throw new Error(`Cannot sell ${fill.symbol}: no open position`);
       }
-      if (fill.qty > existing.qty + 1e-12) {
+      if (fill.qty > existing.qty + QTY_EPSILON) {
         throw new Error(
           `Cannot sell ${fill.qty} ${fill.symbol}: only ${existing.qty} held`,
         );
@@ -110,7 +170,7 @@ export class Portfolio {
       this.realizedPnlUsd += realized;
       existing.qty -= fill.qty;
       this.cashUsd += notional - fee;
-      if (existing.qty <= 1e-12) {
+      if (existing.qty <= QTY_EPSILON) {
         this.positions.delete(fill.symbol);
       }
     }

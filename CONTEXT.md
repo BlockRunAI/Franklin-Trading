@@ -19,7 +19,7 @@ The first, unpaid HTTP request whose 402 response carries the payment terms; Fra
 _Avoid_: Pre-flight, handshake.
 
 **BlockRun Gateway**:
-The single upstream service Franklin calls for both LLM completions and paid tools (Exa, ImageGen, VideoGen, MusicGen, market data); aggregates <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models and accepts x402.
+The single upstream service Franklin calls for both LLM completions and paid tools (Exa, ImageGen, VideoGen, MusicGen, market data); aggregates <!-- br:models.chatVisible -->72<!-- /br:models.chatVisible --> models and accepts x402.
 _Avoid_: API, provider, backend, BlockRun (without "Gateway") when referring to the service.
 
 **Per-turn spend cap**:
@@ -37,7 +37,7 @@ The shortcut → canonical-model-id table at `src/ui/model-picker.ts` and `src/p
 _Avoid_: Model registry, model list.
 
 **Picker shortcut**:
-A short alias (e.g. `free`, `kimi`, `sonnet-4.6`) that resolves to a canonical gateway model id (`nvidia/qwen3-coder-480b`).
+A short alias (e.g. `free`, `kimi`, `sonnet`) that resolves to a canonical gateway model id (`nvidia/nemotron-nano-9b-v2`).
 _Avoid_: Alias (used in code), nickname.
 
 **Tier**:
@@ -53,7 +53,7 @@ The `blockrun/auto` profile: the router classifies the turn into a tier and reso
 _Avoid_: Smart mode, dynamic mode.
 
 **Free tier matrix**:
-The agent-tested set of free gateway models that pass both the echo and Bash-tool live probes; current members are `nvidia/qwen3-coder-480b` and `nvidia/llama-4-maverick`.
+The agent-tested set of free gateway models that pass both the echo and Bash-tool live probes; current members are `nvidia/nemotron-nano-9b-v2`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` and `nvidia/mistral-nemotron`.
 _Avoid_: Free models (use this only for the broader picker category).
 
 **Fallback chain**:
@@ -117,7 +117,7 @@ A nested Franklin agent invocation; spawning a paid sub-model from a free parent
 _Avoid_: Child agent, helper agent.
 
 **MOA**:
-The Mixture-of-Agents tool that runs several free reference models in parallel and aggregates with a single aggregator model (currently `nvidia/qwen3-coder-480b`).
+The Mixture-of-Agents tool that runs several free reference models in parallel and aggregates with a single aggregator model (currently `nvidia/nemotron-nano-9b-v2`).
 _Avoid_: Ensemble, multi-model.
 
 **Content piece**:
@@ -157,7 +157,7 @@ _Avoid_: Bridge, adapter.
 
 ## Example dialogue
 
-> **Reviewer:** "Why is `franklin --model gpt-oss` silently routing to `nvidia/qwen3-coder-480b`?"
+> **Reviewer:** "Why is `franklin-trading --model gpt-oss` silently routing to `nvidia/nemotron-nano-9b-v2`?"
 > **Author:** "It's a backward-compat **picker shortcut** — the canonical model behind `gpt-oss` was retired by the gateway, so we point the alias at a member of the **free tier matrix** so muscle memory keeps working without falling back to a paid model."
 >
 > **Reviewer:** "Then a 402 came back on the auto-routed turn and we still kept going?"

@@ -18,6 +18,7 @@ import type { TradeLog, TradeLogEntry, TradeRationale } from '../trading/trade-l
 import { scoreEntry } from '../trading/journal-quality.js';
 import { renderDisciplineFooter } from '../trading/journal-display.js';
 import {
+  renderCloseBlocked,
   renderOrderBlocked,
   renderOrderFilled,
   renderPortfolio,
@@ -123,10 +124,14 @@ export function createTradingCapabilities(
     spec: {
       name: 'TradingOpenPosition',
       description:
-        'Open (buy into) a position. Pre-trade risk checks enforce per-position and total ' +
-        'exposure caps; a blocked order returns a normal text result with the reason — the ' +
-        'agent should read it and try again with a smaller qty if appropriate. This is paper ' +
-        'trading: fills are simulated against the provided price. ' +
+        'Open (buy into) a position. Deterministic pre-trade risk checks enforce per-position ' +
+        'and total exposure caps AND cash sufficiency: cash must cover notional PLUS the exchange ' +
+        'fee (currently 10 bps of notional), so size qty below cash / price. A blocked order ' +
+        'returns a normal text result with the reason and advice — only shrink qty when the ' +
+        'reason is a risk cap or cash; a fee-quote or venue failure is not a sizing problem, do ' +
+        'not retry blindly. A filled order may carry post-execution warnings (fee above the ' +
+        'approved estimate, fill deviating from the order) — the fill IS booked; read them before ' +
+        'trading again. This is paper trading: fills are simulated against the provided price. ' +
         'Optionally pass a `rationale` object documenting why — direction, price target, stop, ' +
         'time horizon, conviction, evidence, tags, thesis. The journal scores entries on ' +
         'rationale completeness (not P&L) and surfaces the discipline trend in TradingPortfolio.',
@@ -170,7 +175,7 @@ export function createTradingCapabilities(
 
       const outcome = await engine.openPosition({ symbol, qty, priceUsd });
       if (outcome.status === 'blocked') {
-        return { output: renderOrderBlocked({ symbol, qty, priceUsd, reason: outcome.reason }) };
+        return { output: renderOrderBlocked({ symbol, qty, priceUsd, reason: outcome.reason, kind: outcome.kind }) };
       }
       if (outcome.status === 'noop') {
         return { output: `No-op: ${outcome.reason}` };
@@ -187,6 +192,7 @@ export function createTradingCapabilities(
           feeUsd: outcome.fill.feeUsd,
           realizedPnlUsd: 0,
           rationale,
+          ...(outcome.warnings.length ? { warnings: outcome.warnings } : {}),
         };
         const history = tradeLog.all();
         draftEntry.qualityScore = scoreEntry(draftEntry, history);
@@ -199,6 +205,7 @@ export function createTradingCapabilities(
           symbol,
           fill: outcome.fill,
           portfolio: enginePortfolio(engine),
+          warnings: outcome.warnings,
         }),
       };
     },
@@ -210,7 +217,10 @@ export function createTradingCapabilities(
       description:
         'Close (sell) an open position, realizing P&L against the average entry price. ' +
         "Omit qty to flatten the position entirely; pass qty to partially reduce. Uses the " +
-        "exchange's current mark — no manual price required. " +
+        "exchange's current mark — no manual price required. The sale is risk-checked like a " +
+        'buy (quantity must not exceed the holding; the exchange fee must not consume the whole ' +
+        'sale) and a blocked close returns the reason with advice; a filled close may carry ' +
+        'post-execution warnings that must be read before trading again. ' +
         'Optionally pass a `review` note documenting whether the trade hit its plan; that ' +
         'boosts the journal discipline score for this entry.',
       input_schema: {
@@ -248,7 +258,7 @@ export function createTradingCapabilities(
         return { output: `No open ${symbol} position to close.` };
       }
       if (outcome.status === 'blocked') {
-        return { output: `## Close blocked\n- Symbol: ${symbol}\n- Reason: ${outcome.reason}` };
+        return { output: renderCloseBlocked({ symbol, qty, reason: outcome.reason, kind: outcome.kind }) };
       }
 
       const tradeRealized = portfolio.realizedPnlUsd - priorRealized;
@@ -263,6 +273,7 @@ export function createTradingCapabilities(
           feeUsd: outcome.fill.feeUsd,
           realizedPnlUsd: tradeRealized,
           review,
+          ...(outcome.warnings.length ? { warnings: outcome.warnings } : {}),
         };
         draftEntry.qualityScore = scoreEntry(draftEntry, tradeLog.all());
         tradeLog.append(draftEntry);
@@ -275,6 +286,7 @@ export function createTradingCapabilities(
           fill: outcome.fill,
           tradeRealized,
           portfolio,
+          warnings: outcome.warnings,
         }),
       };
     },

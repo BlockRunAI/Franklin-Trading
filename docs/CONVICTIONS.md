@@ -102,8 +102,14 @@ The Risk Officer persona's schema is just a *display* of what the code
 already decided. **The LLM is never the last line of defense.**
 
 **Enforced by**: `src/trading/risk.ts` (extended in M3) + a runtime
-invariant: every order through `TradingEngine.openPosition()` re-reads
-the config and re-evaluates caps. Property-tested.
+invariant: every order through `TradingEngine` — `openPosition()` AND
+`closePosition()` — is re-evaluated by `RiskEngine.check` (inputs, cash
+including the exchange fee, caps, sell integrity) before it reaches the
+venue, and the delivered fill is checked again after. Since 0.3.0 the
+post-execution check is record-then-flag: a fill the venue already
+executed is always booked and any breach is surfaced as a warning, because
+a rejection after execution would leave real money at the venue that the
+local book does not know about. Property-tested.
 
 ---
 

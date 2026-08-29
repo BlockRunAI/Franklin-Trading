@@ -5,6 +5,7 @@
  */
 
 import type { Dialogue, ContentPart, UserContentPart } from './types.js';
+import { peekGatewayModel, warmGatewayModelsCache } from '../gateway-models.js';
 
 const DEFAULT_BYTES_PER_TOKEN = 4;
 
@@ -211,62 +212,143 @@ export function estimateHistoryTokens(history: Dialogue[]): number {
  */
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic. The BlockRun gateway model entry advertises 1M context for
-  // Opus 4.8 / 4.7, but the 1M beta header may not be enabled at the gateway
+  // Opus 5 / 4.8 / 4.7, but the 1M beta header may not be enabled at the gateway
   // edge yet — sending more than 200k without it 413s. Keep 200k as the
   // safe Franklin baseline; bump to 1_000_000 in a separate commit once
   // a real >200k call has been verified end-to-end.
+  // Fable 5 / Sonnet 5 advertise 1M at the gateway; keep the 200k safe baseline
+  // (same rationale as Opus above) until a real >200k call is verified.
+  'anthropic/claude-fable-5': 200_000,
+  'anthropic/claude-opus-5': 200_000,
   'anthropic/claude-opus-4.8': 200_000,
   'anthropic/claude-opus-4.7': 200_000,
-  'anthropic/claude-opus-4.6': 200_000,
+  'anthropic/claude-opus-4.6': 200_000, // hidden from /v1/models, still served (probed 2026-08-29)
+  'anthropic/claude-opus-4.5': 200_000,
+  'anthropic/claude-sonnet-5': 200_000,
   'anthropic/claude-sonnet-4.6': 200_000,
+  'anthropic/claude-sonnet-4.5': 200_000,
   'anthropic/claude-sonnet-4': 200_000,
   'anthropic/claude-haiku-4.5': 200_000,
+  // Retired 2026-07-14 (gateway 400s on it) — kept so replayed sessions that
+  // recorded the dated id still resolve a context window.
   'anthropic/claude-haiku-4.5-20251001': 200_000,
   // OpenAI
   // gpt-5.5 advertises 1.05M context at the gateway, but Franklin keeps the
   // conservative 128k baseline matching every other gpt-5.x line — bump in
   // a separate change once a real >128k call has been verified end-to-end.
+  'openai/gpt-5.6-sol': 128_000,
+  'openai/gpt-5.6-terra': 128_000,
+  'openai/gpt-5.6-luna': 128_000,
   'openai/gpt-5.5': 128_000,
   'openai/gpt-5.4': 128_000,
   'openai/gpt-5.4-pro': 128_000,
+  'openai/gpt-5.4-mini': 128_000,
+  'openai/gpt-5.4-nano': 128_000,
   'openai/gpt-5.3': 128_000,
   'openai/gpt-5.3-codex': 128_000,
   'openai/gpt-5.2': 128_000,
   'openai/gpt-5-mini': 128_000,
   'openai/gpt-5-nano': 128_000,
+  'openai/gpt-5.2-pro': 400_000,
   'openai/gpt-4.1': 1_000_000,
+  'openai/gpt-4.1-mini': 128_000,
+  'openai/gpt-4.1-nano': 128_000,
+  'openai/gpt-4o': 128_000,
+  'openai/gpt-4o-mini': 128_000,
+  'openai/o1': 200_000,
   'openai/o3': 200_000,
+  'openai/o3-mini': 128_000,
   'openai/o4-mini': 200_000,
   // Google
   'google/gemini-2.5-pro': 1_000_000,
   'google/gemini-2.5-flash': 1_000_000,
   'google/gemini-2.5-flash-lite': 1_000_000,
   'google/gemini-3.1-pro': 1_000_000,
+  'google/gemini-3.5-flash': 1_000_000,
+  'google/gemini-3.1-flash-lite': 1_000_000,
+  'google/gemini-3-flash-preview': 1_048_576,
   // DeepSeek (V4 family — gateway aliased deepseek-chat / -reasoner to V4
   // Flash on 2026-05-03; context bumped 128K → 1M for both, 65K out)
   'deepseek/deepseek-chat': 1_000_000,
   'deepseek/deepseek-reasoner': 1_000_000,
   'deepseek/deepseek-v4-pro': 1_000_000,
-  // xAI
+  // xAI. grok-4.5 / 4.3 / build were missing until 2026-08-20: neither matches
+  // any inference pattern below, so a cold catalog cache fell through to the
+  // blind 128k default and compacted a 500K–1M window ~4-8x too early.
+  'xai/grok-4.5': 500_000,
+  'xai/grok-4.3': 1_000_000,
+  'xai/grok-build-0.1': 256_000,
+  // xAI 3.x / 4-0709 / 4-1-fast: hidden from /v1/models since 2026-08 but
+  // still served and charged (probed 2026-08-29) — keep their windows.
   'xai/grok-3': 131_072,
+  'xai/grok-3-mini': 131_072,
   'xai/grok-4-0709': 131_072,
   'xai/grok-4-1-fast-reasoning': 131_072,
+  'xai/grok-4-1-fast-non-reasoning': 131_072,
+  'xai/grok-4-fast-reasoning': 131_072,
+  'xai/grok-4-fast-non-reasoning': 131_072,
   // Others
+  'zai/glm-5.3': 1_000_000, // flagship 2026-08 — 1M context, always-on reasoning
+  'zai/glm-5.3-flash': 1_000_000, // 2026-08-29 catalog sync — 1M context, vision, $0.15/$0.5
+  'zai/glm-5.2': 1_000_000, // flagship bump 2026-06 — context jumped 200K → 1M
   'zai/glm-5.1': 200_000,
+  'zai/glm-5': 200_000,
+  'zai/glm-5-turbo': 200_000,
+  'moonshot/kimi-k3': 1_048_576,
+  // K2.x: hidden from /v1/models, still served (probed 2026-08-29).
+  'moonshot/kimi-k2.7': 256_000,
   'moonshot/kimi-k2.6': 256_000,
   'moonshot/kimi-k2.5': 128_000,
   'minimax/minimax-m3': 1_000_000,
   'minimax/minimax-m2.7': 128_000,
-  // NVIDIA-hosted free tier (2026-04-29 V4 Flash + Omni launch)
-  'nvidia/deepseek-v4-flash': 1_000_000,
+  // NVIDIA-hosted free tier (refreshed 2026-08-12 to match live /api/v1/models).
+  // Dead ids (qwen3-next, qwen3.5-122b, seed-oss, maverick, mistral-large) are
+  // kept so legacy session records still get a sane window.
+  'nvidia/qwen3-next-80b-a3b-instruct': 262_144, // NVIDIA EOL 410, 2026-07-27
+  'nvidia/qwen3.5-122b-a10b': 131_072,
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning': 256_000,
+  'nvidia/mistral-nemotron': 131_072,
+  'nvidia/step-3.7-flash': 131_072,
+  'nvidia/seed-oss-36b': 131_072,
+  'nvidia/nemotron-nano-9b-v2': 131_072, // current free default
+  'nvidia/nemotron-nano-12b-v2-vl': 131_072,
+  'nvidia/llama-4-maverick': 131_072,
+  'nvidia/mistral-large-3-675b': 131_072,
+  // Qwen (paid) — Max tier is 1M ctx; the generic `qwen` fallback below is
+  // 128k and would compact ~8x too early.
+  'qwen/qwen3.7-max': 1_000_000,
+  'qwen/qwen3.7-plus': 1_000_000,
+  'qwen/qwen3.7-flash': 1_000_000,
+  // 2026-08 gateway additions (windows from the live catalog).
+  'google/gemini-3.6-flash': 1_048_576,
+  'google/gemini-3.5-flash-lite': 1_048_576,
+  'openai/gpt-5.6-luna-pro': 1_050_000,
+  'openai/gpt-5.6-terra-pro': 1_050_000,
+  'openai/gpt-5.6-sol-pro': 1_050_000,
+  'openai/gpt-5.5-pro': 1_050_000,
+  'openai/chat-latest': 128_000,
+  'tencent/hy3': 262_144,
+  'xiaomi/mimo-v2.5-pro': 1_048_576,
 };
 
 /**
  * Get the context window size for a model, with a conservative default.
  */
 export function getContextWindow(model: string): number {
+  // The static table wins. It is not merely a cache of the gateway catalog —
+  // several entries are deliberate DOWNGRADES from what the gateway advertises
+  // (see the Anthropic block above: the gateway reports 1M, but its 1M beta
+  // header is not enabled, so anything over 200k 413s). Letting the catalog
+  // override these would reintroduce the exact bug those comments prevent.
   if (MODEL_CONTEXT_WINDOWS[model]) return MODEL_CONTEXT_WINDOWS[model];
+  // No static entry — a live catalog value beats the blind default below.
+  // This is the qwen3.7-max class: a real model nobody has catalogued yet,
+  // which would otherwise silently compact at 128k.
+  const live = peekGatewayModel(model)?.context_window;
+  if (live && live > 0) return live;
+  // Cache is cold. Kick a fetch (deduped in-flight, errors swallowed) so the
+  // next call in this session gets a real number instead of the blind default.
+  warmGatewayModelsCache();
   // Pattern-based inference for unknown models
   if (model.includes('gemini')) return 1_000_000;
   if (model.includes('claude')) return 200_000;

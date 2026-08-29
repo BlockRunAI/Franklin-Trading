@@ -11,6 +11,9 @@ import {
 } from '@blockrun/llm';
 import type { Chain } from '../config.js';
 import { recordUsage } from '../stats/tracker.js';
+// Single source of truth for shortcuts — shared with the /model picker so the
+// proxy can never drift from the interactive UI (it did before: grok→grok-3).
+import { MODEL_SHORTCUTS } from '../ui/model-picker.js';
 import { appendSettlementRow } from '../stats/cost-log.js';
 import { appendAudit } from '../stats/audit.js';
 import {
@@ -22,13 +25,15 @@ import {
 import {
   routeRequest,
   parseRoutingProfile,
-  getFallbackChain as getRouterFallbackChain,
   isVisionModel,
   messagesNeedVision,
   pickVisionSibling,
+  markModelUnavailable,
   type RoutingProfile,
 } from '../router/index.js';
+import { classifyAgentError } from '../agent/error-classifier.js';
 import { estimateCost } from '../pricing.js';
+import { getMaxOutputTokens } from '../agent/optimize.js';
 import { VERSION } from '../config.js';
 
 // User-Agent for backend requests
@@ -62,6 +67,37 @@ import { logger, setDebugMode } from '../logger.js';
 import { isTestFixtureModel } from '../stats/test-fixture.js';
 
 const DEFAULT_MAX_TOKENS = 4096;
+
+/**
+ * Decide the `max_tokens` the proxy forwards upstream.
+ *
+ * An explicit ask is honored; only a missing one gets the adaptive default.
+ * This overwrote unconditionally until 3.35.6 — whatever the caller sent was
+ * replaced by min(adaptive, modelCap), where `adaptive` grows to twice the
+ * previous reply. A client asking for 500 tokens after a long turn got several
+ * thousand instead, and because the gateway quotes on the ceiling it is
+ * requested, that inflated the hold on a request the caller had deliberately
+ * kept small.
+ *
+ * Clamping an explicit ask to `modelCap` stays: asking past the model's own
+ * ceiling is a request the provider rejects outright, and failing it here is
+ * worse than quietly making it legal.
+ *
+ * @param asked      what the caller sent, if anything
+ * @param lastOutput tokens the previous reply on this model produced (0 = none)
+ * @param modelCap   the model's own output ceiling
+ */
+export function resolveProxyMaxTokens(
+  asked: unknown,
+  lastOutput: number,
+  modelCap: number,
+): number {
+  const adaptive =
+    lastOutput > 0 ? Math.max(lastOutput * 2, DEFAULT_MAX_TOKENS) : DEFAULT_MAX_TOKENS;
+  const explicit =
+    typeof asked === 'number' && Number.isFinite(asked) && asked > 0 ? asked : null;
+  return Math.min(explicit ?? adaptive, modelCap);
+}
 // 180s budget for *time-to-headers* — reasoning-class models (zai/glm-*,
 // nemotron *-reasoning, deepseek-r*, gpt-5-codex, anthropic extended-thinking)
 // routinely take 60–120s to first token on cache-cold prompts or busy
@@ -135,88 +171,9 @@ function trackOutputTokens(model: string, tokens: number) {
   lastOutputByModel.set(model, tokens);
 }
 
-// Model shortcuts for quick switching
-const MODEL_SHORTCUTS: Record<string, string> = {
-  // Routing profiles — Auto-only since 2026-05-03 (Eco/Premium retired).
-  // `eco` / `premium` aliases retained for back-compat with proxy clients;
-  // they parse to Auto downstream.
-  auto: 'blockrun/auto',
-  smart: 'blockrun/auto',
-  eco: 'blockrun/auto',
-  premium: 'blockrun/auto',
-  // Anthropic
-  sonnet: 'anthropic/claude-sonnet-4.6',
-  claude: 'anthropic/claude-sonnet-4.6',
-  'sonnet-4.6': 'anthropic/claude-sonnet-4.6',
-  opus: 'anthropic/claude-opus-4.8',
-  'opus-4.8': 'anthropic/claude-opus-4.8',
-  'opus-4.7': 'anthropic/claude-opus-4.7',
-  'opus-4.6': 'anthropic/claude-opus-4.6',
-  haiku: 'anthropic/claude-haiku-4.5-20251001',
-  'haiku-4.5': 'anthropic/claude-haiku-4.5-20251001',
-  // OpenAI
-  // `gpt` / `gpt5` / `gpt-5` follow the gateway's flagship — currently 5.5.
-  gpt: 'openai/gpt-5.5',
-  gpt5: 'openai/gpt-5.5',
-  'gpt-5': 'openai/gpt-5.5',
-  'gpt-5.5': 'openai/gpt-5.5',
-  'gpt-5.4': 'openai/gpt-5.4',
-  'gpt-5.4-pro': 'openai/gpt-5.4-pro',
-  'gpt-5.3': 'openai/gpt-5.3',
-  'gpt-5.2': 'openai/gpt-5.2',
-  'gpt-5.2-pro': 'openai/gpt-5.2-pro',
-  'gpt-4.1': 'openai/gpt-4.1',
-  codex: 'openai/gpt-5.3-codex',
-  nano: 'openai/gpt-5-nano',
-  mini: 'openai/gpt-5-mini',
-  o3: 'openai/o3',
-  o4: 'openai/o4-mini',
-  'o4-mini': 'openai/o4-mini',
-  o1: 'openai/o1',
-  // Google
-  gemini: 'google/gemini-2.5-pro',
-  'gemini-2.5': 'google/gemini-2.5-pro',
-  flash: 'google/gemini-2.5-flash',
-  'gemini-3': 'google/gemini-3.1-pro',
-  'gemini-3.1': 'google/gemini-3.1-pro',
-  // xAI
-  grok: 'xai/grok-3',
-  'grok-3': 'xai/grok-3',
-  'grok-4': 'xai/grok-4-0709',
-  'grok-fast': 'xai/grok-4-1-fast-reasoning',
-  'grok-4.1': 'xai/grok-4-1-fast-reasoning',
-  // DeepSeek
-  deepseek: 'deepseek/deepseek-chat',
-  r1: 'deepseek/deepseek-reasoner',
-  // Free models (agent-tested gateway free tier — refreshed 2026-04)
-  free: 'nvidia/qwen3-coder-480b',
-  glm4: 'nvidia/qwen3-coder-480b',
-  'deepseek-free': 'nvidia/qwen3-coder-480b',
-  'qwen-coder': 'nvidia/qwen3-coder-480b',
-  'qwen-think': 'nvidia/qwen3-coder-480b',
-  maverick: 'nvidia/llama-4-maverick',
-  'gpt-oss': 'nvidia/qwen3-coder-480b',
-  'gpt-oss-small': 'nvidia/qwen3-coder-480b',
-  'mistral-small': 'nvidia/llama-4-maverick',
-  // Retired/unreliable gateway-model aliases (map to closest agent-tested current).
-  nemotron: 'nvidia/qwen3-coder-480b',
-  devstral: 'nvidia/qwen3-coder-480b',
-  // Minimax
-  minimax: 'minimax/minimax-m3',
-  'm3': 'minimax/minimax-m3',
-  'm2.7': 'minimax/minimax-m2.7',
-  // Others
-  glm: 'zai/glm-5.1',
-  'glm-turbo': 'zai/glm-5-turbo',
-  'glm5': 'zai/glm-5.1',
-  kimi: 'moonshot/kimi-k2.6',
-  'k2.6': 'moonshot/kimi-k2.6',
-  // K2.5 retired by the gateway — aliases resolve to K2.6 for muscle memory.
-  'kimi-k2.5': 'moonshot/kimi-k2.6',
-  'k2.5': 'moonshot/kimi-k2.6',
-};
-
-// Model pricing now uses shared source from src/pricing.ts
+// Model shortcuts for quick switching — imported from ui/model-picker.ts (the
+// single source of truth) so the proxy and the interactive /model picker can
+// never drift apart. Model pricing likewise comes from src/pricing.ts.
 
 function detectModelSwitch(parsed: {
   messages?: Array<{ role: string; content: string | unknown[] | unknown }>;
@@ -354,6 +311,7 @@ export function createProxy(options: ProxyOptions): http.Server {
     req.on('end', async () => {
       let requestModel = currentModel || options.modelOverride || 'unknown';
       let usedFallback = false;
+      let routerCandidates: string[] = [];
 
       try {
         if (options.debug) logger.debug(`[franklin] request: ${req.method} ${req.url} currentModel=${currentModel || 'none'}`);
@@ -393,7 +351,7 @@ export function createProxy(options: ProxyOptions): http.Server {
             // Model override logic:
             // - Native Anthropic-format IDs (e.g. "claude-sonnet-4-6-20250514")
             //   don't contain "/" — these MUST be replaced with currentModel.
-            // - BlockRun model IDs always contain "/" (e.g. "blockrun/auto", "nvidia/nemotron-ultra-253b")
+            // - BlockRun model IDs always contain "/" (e.g. "blockrun/auto", "nvidia/mistral-nemotron")
             //   — these should be passed through as-is.
             // - If --model CLI flag is set, always override regardless.
             if (options.modelOverride) {
@@ -431,11 +389,53 @@ export function createProxy(options: ProxyOptions): http.Server {
                 }
               }
 
-              // Route the request — propagate vision-need so AUTO_TIERS' V4
-              // Pro default doesn't get picked for an image-bearing turn.
-              const routing = routeRequest(promptText, routingProfile, proxyNeedsVision);
+              const toolNames = (Array.isArray(parsed.tools) ? parsed.tools : [])
+                .map((tool: { name?: string; function?: { name?: string } }) => tool.name ?? tool.function?.name)
+                .filter((name: unknown): name is string => typeof name === 'string');
+              const toolChoice = parsed.tool_choice;
+              const toolChoiceType = typeof toolChoice === 'object' && toolChoice !== null
+                ? String(toolChoice.type)
+                : undefined;
+              const forbidsTools = toolChoice === 'none' || toolChoiceType === 'none';
+              const requiresTools = !forbidsTools && (toolChoice === 'required'
+                || (toolChoiceType !== undefined
+                  && ['any', 'tool', 'function'].includes(toolChoiceType)));
+              const explicitToolRequirement = forbidsTools
+                ? false
+                : requiresTools
+                  ? true
+                  : undefined;
+              const responseFormat = parsed.response_format;
+              const requiresStructuredOutput = !!responseFormat
+                && responseFormat.type !== undefined
+                && responseFormat.type !== 'text';
+              const systemPrompt = typeof parsed.system === 'string'
+                ? parsed.system
+                : Array.isArray(parsed.system)
+                  ? parsed.system
+                    .filter((part: { type?: string }) => part.type === 'text')
+                    .map((part: { text?: string }) => part.text ?? '')
+                    .join('\n')
+                  : undefined;
+
+              // Same local Router core as ClawRouter. The proxy supplies
+              // concrete request capabilities; no classifier call is added.
+              const routing = routeRequest(promptText, routingProfile, {
+                needsVision: proxyNeedsVision,
+                maxOutputTokens: typeof parsed.max_tokens === 'number'
+                  ? parsed.max_tokens
+                  : DEFAULT_MAX_TOKENS,
+                hasTools: toolNames.length > 0,
+                toolNames,
+                ...(explicitToolRequirement !== undefined
+                  ? { requiresTools: explicitToolRequirement }
+                  : {}),
+                requiresStructuredOutput,
+                systemPrompt,
+              });
               parsed.model = routing.model;
               requestModel = routing.model;
+              routerCandidates = routing.candidates ?? [routing.model];
 
               logger.info(
                 `[franklin] 🧠 Smart routing: ${routingProfile} → ${routing.tier} → ${routing.model} ` +
@@ -459,22 +459,14 @@ export function createProxy(options: ProxyOptions): http.Server {
 
             {
               const original = parsed.max_tokens;
-              const model = (parsed.model || '').toLowerCase();
-              const modelCap =
-                model.includes('deepseek') ||
-                model.includes('haiku') ||
-                model.includes('gpt-oss')
-                  ? 8192
-                  : 16384;
+              // Was a hardcoded substring ladder (deepseek|haiku|gpt-oss → 8192,
+              // everything else → 16384) that ignored MODEL_MAX_OUTPUT entirely,
+              // so proxy users got a 16K ceiling on models the CLI already knew
+              // could emit 65K+ (Kimi K3, GPT-5.6 Sol). Same table both paths now.
+              const modelCap = getMaxOutputTokens(parsed.model || '');
 
-              // Use max of (last output × 2, default 4096) capped by model limit
-              // This ensures short replies don't starve the next request
               const lastOut = lastOutputByModel.get(requestModel) ?? 0;
-              const adaptive =
-                lastOut > 0
-                  ? Math.max(lastOut * 2, DEFAULT_MAX_TOKENS)
-                  : DEFAULT_MAX_TOKENS;
-              parsed.max_tokens = Math.min(adaptive, modelCap);
+              parsed.max_tokens = resolveProxyMaxTokens(original, lastOut, modelCap);
 
               if (original !== parsed.max_tokens && options.debug) {
                 logger.debug(`[franklin] max_tokens: ${original || 'unset'} → ${parsed.max_tokens} (last output: ${lastOut || 'none'})`);
@@ -540,7 +532,12 @@ export function createProxy(options: ProxyOptions): http.Server {
         if (fallbackEnabled && body && requestPath.includes('messages')) {
           const fallbackConfig: FallbackConfig = {
             ...DEFAULT_FALLBACK_CONFIG,
-            chain: buildFallbackChain(requestModel),
+            chain: [
+              ...new Set([
+                ...routerCandidates,
+                ...buildFallbackChain(requestModel),
+              ]),
+            ],
           };
 
           const result = await fetchWithPaymentFallback(
@@ -620,6 +617,16 @@ export function createProxy(options: ProxyOptions): http.Server {
             } else {
               // Wrap in Anthropic error format
               const errorMsg = parsed.error?.message || parsed.message || rawText.slice(0, 500);
+              // The proxy's fallback chain only retries 429/5xx, so a routed
+              // id the gateway rejects outright (400 "Unknown model", 404,
+              // 410) reaches here untouched. Feed the router's dead-rung
+              // kill-switch so the next routed request skips it; a client
+              // that pinned the id by name is left alone.
+              if (routerCandidates.length > 0 && classifyAgentError(String(errorMsg)).modelUnavailable) {
+                if (markModelUnavailable(finalModel)) {
+                  logger.warn(`[franklin] ${finalModel} rejected by the gateway as unavailable — removed from routing for this process`);
+                }
+              }
               errorBody = JSON.stringify({
                 type: 'error',
                 error: {
@@ -964,12 +971,13 @@ async function handleBasePayment(
   const paymentRequired = parsePaymentRequired(paymentHeader);
   const details = extractPaymentDetails(paymentRequired);
   const paidUsd = paymentAmountToUsd(details.amount);
-  appendSettlementRow(extractEndpointPath(url), paidUsd, {
+  const endpoint = extractEndpointPath(url);
+  const settlementMeta = {
     model,
     wallet: fromAddress,
     network: details.network || 'base-mainnet',
     client_kind: 'ProxyClient',
-  });
+  };
 
   const paymentPayload = await createPaymentPayload(
     privateKey,
@@ -995,6 +1003,8 @@ async function handleBasePayment(
     body: body || undefined,
   }, timeoutMs, `Paid proxy request for ${model}`);
 
+  if (paid.status === 402) return { response: paid, paidUsd: 0 };
+  appendSettlementRow(endpoint, paidUsd, settlementMeta);
   return { response: paid, paidUsd };
 }
 
@@ -1021,12 +1031,13 @@ async function handleSolanaPayment(
   const paymentRequired = parsePaymentRequired(paymentHeader);
   const details = extractPaymentDetails(paymentRequired, SOLANA_NETWORK);
   const paidUsd = paymentAmountToUsd(details.amount);
-  appendSettlementRow(extractEndpointPath(url), paidUsd, {
+  const endpoint = extractEndpointPath(url);
+  const settlementMeta = {
     model,
     wallet: fromAddress,
     network: details.network || 'solana-mainnet',
     client_kind: 'ProxyClient',
-  });
+  };
 
   const secretKey = await solanaKeyToBytes(privateKey);
 
@@ -1056,6 +1067,8 @@ async function handleSolanaPayment(
     body: body || undefined,
   }, timeoutMs, `Paid proxy request for ${model}`);
 
+  if (paid.status === 402) return { response: paid, paidUsd: 0 };
+  appendSettlementRow(endpoint, paidUsd, settlementMeta);
   return { response: paid, paidUsd };
 }
 

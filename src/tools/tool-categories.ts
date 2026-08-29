@@ -55,6 +55,24 @@ export const CORE_TOOL_NAMES: ReadonlySet<string> = new Set([
   // category. Cross-platform pair lookup is unique to the gateway and
   // is the kind of data a non-wallet agent fundamentally cannot reach.
   'PredictionMarket',
+  // Real-money Polymarket betting — the execution half of the prediction-market
+  // story: setup wallet, fund, buy/sell, positions, redeem, withdraw. Core so
+  // the agent reaches for it the moment "place the bet" follows the research.
+  'PolymarketBet',
+  // Trade-plan approval — the gate in front of every real-money trade. Must
+  // be core: the moment a trade is blocked for lacking a plan, the agent
+  // needs this tool visible to propose one.
+  'TradePlan',
+  // Goal-mode control — must be visible whenever /goal armed a goal, and the
+  // goal directive references it by name.
+  'UpdateGoal',
+  // Crypto market data — fear/greed, token rankings, ETF flows, options,
+  // liquidations, technical & on-chain indicators. The "what's the crypto
+  // mood / which coins are pumping / BTC's RSI" category. Core so the agent
+  // reaches for it on natural crypto questions instead of falling back to
+  // TradingMarket prices + guessing the Fear & Greed index. SurfChain /
+  // SurfSocial stay activation-gated (lower-frequency, long-tail surface).
+  'SurfMarket',
   // Research — synthesized answers with real citations, semantic web
   // search, and clean URL fetching. Any factual current-events question
   // ("why did SOL drop?") should route here rather than the model's

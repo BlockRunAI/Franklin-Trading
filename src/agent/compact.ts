@@ -544,7 +544,7 @@ function formatCompactSummary(raw: string): string {
 function pickCompactionModel(primaryModel: string): string {
   // Free parent → free compaction (no silent charge)
   if (primaryModel.startsWith('nvidia/') || primaryModel === 'blockrun/free') {
-    return 'nvidia/qwen3-coder-480b';
+    return 'nvidia/nemotron-nano-9b-v2';
   }
   // Use cheapest capable model for summarization to save cost
   // Tier down: opus/pro → sonnet, sonnet → haiku, everything else → flash (cheapest capable)
@@ -552,7 +552,7 @@ function pickCompactionModel(primaryModel: string): string {
     return 'anthropic/claude-sonnet-4.6';
   }
   if (primaryModel.includes('sonnet') || primaryModel.includes('gpt-5.4') || primaryModel.includes('gpt-5.5') || primaryModel.includes('gemini-2.5-pro')) {
-    return 'anthropic/claude-haiku-4.5-20251001';
+    return 'anthropic/claude-haiku-4.5';
   }
   if (primaryModel.includes('haiku') || primaryModel.includes('mini') || primaryModel.includes('nano')) {
     return 'google/gemini-2.5-flash'; // Cheapest capable model

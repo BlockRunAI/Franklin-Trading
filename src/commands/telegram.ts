@@ -43,6 +43,14 @@ export async function telegramCommand(opts: TelegramCommandOptions): Promise<voi
     process.exit(1);
   }
 
+  // Optional allowlist: extra numeric user ids that may drive the bot (e.g. other
+  // people in a group). Comma-separated. Owner is always allowed.
+  const allowedUsers = new Set<number>([ownerId]);
+  for (const raw of (process.env.TELEGRAM_ALLOWED_USERS ?? '').split(',')) {
+    const id = parseInt(raw.trim(), 10);
+    if (Number.isFinite(id) && id > 0) allowedUsers.add(id);
+  }
+
   const chain = loadChain();
   const apiUrl = API_URLS[chain];
   const config = loadConfig();
@@ -51,7 +59,7 @@ export async function telegramCommand(opts: TelegramCommandOptions): Promise<voi
   const model =
     opts.model ||
     config['default-model'] ||
-    'nvidia/qwen3-coder-480b';
+    'nvidia/nemotron-nano-9b-v2';
 
   const workingDir = process.cwd();
   const systemInstructions = assembleInstructions(workingDir, model);
@@ -109,6 +117,7 @@ export async function telegramCommand(opts: TelegramCommandOptions): Promise<voi
     await runTelegramBot(agentConfig, {
       token,
       ownerId,
+      allowedUsers,
       log: (line) => console.log(chalk.dim(line)),
     });
   } catch (err) {

@@ -22,6 +22,10 @@ process.env.FRANKLIN_NO_ANALYZER = '1';
 // controlled separately via setSessionPersistenceDisabled and stays on
 // for the resume tests at 489/609.
 process.env.FRANKLIN_NO_AUDIT = '1';
+// Many tests fetch from a local 127.0.0.1 server; the SSRF guard blocks
+// loopback by default, so opt in here. (The guard's own logic is covered by the
+// pure-helper test `isBlockedSsrfHost ...`, which is independent of this env.)
+process.env.FRANKLIN_ALLOW_PRIVATE_FETCH = '1';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -263,9 +267,9 @@ test('proxy server handles OPTIONS and local model switching without backend cal
     });
     assert.equal(switchRes.status, 200, `Expected switch response 200, got ${switchRes.status}`);
     const payload = await switchRes.json();
-    assert.equal(payload.model, 'anthropic/claude-sonnet-4.6');
+    assert.equal(payload.model, 'anthropic/claude-sonnet-5');
     assert.ok(
-      payload.content?.[0]?.text?.includes('Switched to **anthropic/claude-sonnet-4.6**'),
+      payload.content?.[0]?.text?.includes('Switched to **anthropic/claude-sonnet-5**'),
       `Unexpected switch payload: ${JSON.stringify(payload)}`
     );
 
@@ -273,29 +277,30 @@ test('proxy server handles OPTIONS and local model switching without backend cal
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [{ role: 'user', content: 'use k2.6' }],
+        messages: [{ role: 'user', content: 'use k3' }],
       }),
     });
     assert.equal(suffixSwitchRes.status, 200, `Expected suffix switch response 200, got ${suffixSwitchRes.status}`);
     const suffixPayload = await suffixSwitchRes.json();
-    assert.equal(suffixPayload.model, 'moonshot/kimi-k2.6');
+    assert.equal(suffixPayload.model, 'moonshot/kimi-k3');
     assert.ok(
-      suffixPayload.content?.[0]?.text?.includes('Switched to **moonshot/kimi-k2.6**'),
+      suffixPayload.content?.[0]?.text?.includes('Switched to **moonshot/kimi-k3**'),
       `Unexpected suffix switch payload: ${JSON.stringify(suffixPayload)}`
     );
 
     const freeSwitches = {
-      free: 'nvidia/qwen3-coder-480b',
-      glm4: 'nvidia/qwen3-coder-480b',
-      'qwen-think': 'nvidia/qwen3-coder-480b',
-      'qwen-coder': 'nvidia/qwen3-coder-480b',
-      maverick: 'nvidia/llama-4-maverick',
-      'deepseek-free': 'nvidia/qwen3-coder-480b',
-      'gpt-oss': 'nvidia/qwen3-coder-480b',
-      'gpt-oss-small': 'nvidia/qwen3-coder-480b',
-      'mistral-small': 'nvidia/llama-4-maverick',
-      nemotron: 'nvidia/qwen3-coder-480b',
-      devstral: 'nvidia/qwen3-coder-480b',
+      free: 'nvidia/nemotron-nano-9b-v2',
+      glm4: 'nvidia/nemotron-nano-9b-v2',
+      'qwen-think': 'nvidia/nemotron-nano-9b-v2',
+      'qwen-coder': 'nvidia/nemotron-nano-9b-v2',
+      maverick: 'nvidia/nemotron-nano-9b-v2',
+      'deepseek-free': 'nvidia/nemotron-nano-9b-v2',
+      'gpt-oss': 'nvidia/nemotron-nano-9b-v2',
+      'gpt-oss-small': 'nvidia/nemotron-nano-9b-v2',
+      'mistral-small': 'nvidia/mistral-nemotron',
+      nemotron: 'nvidia/mistral-nemotron',
+      devstral: 'nvidia/nemotron-nano-9b-v2',
+      'nano-9b': 'nvidia/nemotron-nano-9b-v2',
     };
     for (const [shortcut, expectedModel] of Object.entries(freeSwitches)) {
       const freeSwitchRes = await fetch(`http://127.0.0.1:${port}/api/messages`, {
@@ -2532,17 +2537,17 @@ test('streamCompletion: 429 response with Retry-After header tags the error mess
 // the user's signed payment was rejected, not absent. Same retry won't
 // help — must fix clock skew / chain / nonce.
 
-test('classifier: Payment verification failed → payment_rejected with chain/clock-skew tip', async () => {
+test('classifier: Payment verification failed → payment_rejected, transient with small retry budget', async () => {
   const { classifyAgentError } = await import('../dist/agent/error-classifier.js');
 
   // Gateway-shape body, exact match for the live failure.
   const live = classifyAgentError('Exa /v1/exa/search failed (402): {"error":"Payment verification failed","details":"Ver..."}');
   assert.equal(live.category, 'payment_rejected');
   assert.equal(live.label, 'PaymentRejected');
-  assert.equal(live.maxRetries, 0, 'must not auto-retry — same signature stays rejected');
+  assert.equal(live.isTransient, true, 'must auto-retry — gateway nonce-race blips need a fresh-nonce retry');
+  assert.equal(live.maxRetries, 3, 'small budget — enough to ride out a burst-load blip, not enough to thrash on a real misconfig');
   assert.match(live.suggestion ?? '', /clock skew/i, 'suggestion should mention clock skew');
   assert.match(live.suggestion ?? '', /chain/i, 'suggestion should mention chain');
-  assert.match(live.suggestion ?? '', /\/model free/i, 'suggestion should offer free-model escape');
 
   // Other variant phrasings the gateway might use.
   for (const msg of ['signature mismatch', 'invalid x-payment header', 'nonce reuse detected']) {
@@ -2573,12 +2578,17 @@ test('agent context: chat-completions example uses real model names (no fictiona
     path.join(process.cwd(), 'dist', 'agent', 'context.js'),
     'utf-8',
   );
-  // Real names that should appear as illustrative examples.
+  // Real names that should appear as illustrative examples. Refreshed
+  // 2026-08-19: every id below returned 402 (exists, needs payment) rather
+  // than 400 on a live POST /api/v1/chat/completions probe.
   for (const real of [
-    'anthropic/claude-sonnet-4.6',
-    'anthropic/claude-opus-4.8',
+    'anthropic/claude-sonnet-5',
+    'anthropic/claude-opus-5',
+    'openai/gpt-5.6-sol',
     'deepseek/deepseek-v4-pro',
-    'zai/glm-5.1',
+    'zai/glm-5.3',
+    'xai/grok-4.5',
+    'qwen/qwen3.7-flash',
   ]) {
     assert.ok(src.includes(real), `chat-completions example list must include real model "${real}"`);
   }
@@ -3036,8 +3046,8 @@ test('Portfolio: buy fill into empty portfolio opens a position and debits cash'
 test('Portfolio: sell closing at higher price realizes positive P&L', async () => {
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const pf = new Portfolio({ startingCashUsd: 1000 });
-  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000 });
-  pf.applyFill({ symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 72_000 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
+  pf.applyFill({ symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 72_000, feeUsd: 0 });
 
   // Cash: 1000 - 700 (buy) + 720 (sell) = 1020 → realized gain of 20.
   assert.equal(pf.cashUsd, 1020);
@@ -3048,9 +3058,9 @@ test('Portfolio: sell closing at higher price realizes positive P&L', async () =
 test('Portfolio: sell more than held throws', async () => {
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const pf = new Portfolio({ startingCashUsd: 1000 });
-  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.005, priceUsd: 70_000 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.005, priceUsd: 70_000, feeUsd: 0 });
   assert.throws(
-    () => pf.applyFill({ symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 72_000 }),
+    () => pf.applyFill({ symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 72_000, feeUsd: 0 }),
     /only 0\.005/,
   );
 });
@@ -3061,7 +3071,7 @@ test('RiskEngine: rejects buy order exceeding per-position cap', async () => {
   const pf = new Portfolio({ startingCashUsd: 1000 });
   const risk = new RiskEngine({ maxPositionUsd: 200, maxTotalExposureUsd: 800 });
 
-  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000 });
+  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
   assert.equal(decision.allowed, false);
   assert.match(decision.reason ?? '', /position cap/i);
 });
@@ -3072,7 +3082,7 @@ test('RiskEngine: allows order sized within position cap and remaining cash', as
   const pf = new Portfolio({ startingCashUsd: 1000 });
   const risk = new RiskEngine({ maxPositionUsd: 200, maxTotalExposureUsd: 800 });
 
-  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 70_000 });
+  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 70_000, feeUsd: 0 });
   assert.equal(decision.allowed, true, decision.reason);
 });
 
@@ -3080,12 +3090,12 @@ test('RiskEngine: rejects buy when cumulative exposure would exceed total cap', 
   const { RiskEngine } = await import('../dist/trading/risk.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const pf = new Portfolio({ startingCashUsd: 1000 });
-  pf.applyFill({ symbol: 'ETH', side: 'buy', qty: 0.15, priceUsd: 3_500 }); // 525 exposure
-  pf.applyFill({ symbol: 'SOL', side: 'buy', qty: 1, priceUsd: 150 });      // 150 exposure
+  pf.applyFill({ symbol: 'ETH', side: 'buy', qty: 0.15, priceUsd: 3_500, feeUsd: 0 }); // 525 exposure
+  pf.applyFill({ symbol: 'SOL', side: 'buy', qty: 1, priceUsd: 150, feeUsd: 0 });      // 150 exposure
   const risk = new RiskEngine({ maxPositionUsd: 300, maxTotalExposureUsd: 800 });
 
   // Proposed BTC buy of 0.003 * 70000 = 210 would push total to 525+150+210 = 885 > 800 cap
-  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.003, priceUsd: 70_000 });
+  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.003, priceUsd: 70_000, feeUsd: 0 });
   assert.equal(decision.allowed, false);
   assert.match(decision.reason ?? '', /total exposure/i);
 });
@@ -3096,16 +3106,94 @@ test('RiskEngine: rejects buy that exceeds available cash regardless of caps', a
   const pf = new Portfolio({ startingCashUsd: 100 });
   const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
 
-  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000 });
+  const decision = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
   assert.equal(decision.allowed, false);
   assert.match(decision.reason ?? '', /insufficient cash/i);
+});
+
+test('RiskEngine: includes the estimated exchange fee in the buy cash check', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+
+  const decision = risk.check(pf, {
+    symbol: 'BTC',
+    side: 'buy',
+    qty: 0.001,
+    priceUsd: 100_000,
+    feeUsd: 0.10,
+  });
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reason ?? '', /insufficient cash/i);
+  assert.match(decision.reason ?? '', /\$100\.10/);
+});
+
+test('RiskEngine: rejects invalid estimated fees', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+
+  for (const feeUsd of [NaN, Infinity, -0.01]) {
+    const decision = risk.check(pf, {
+      symbol: 'BTC', side: 'buy', qty: 0.001, priceUsd: 70_000, feeUsd,
+    });
+    assert.equal(decision.allowed, false, `fee ${feeUsd} must be rejected`);
+    assert.match(decision.reason ?? '', /invalid estimated fee/i);
+  }
+});
+
+test('RiskEngine: rejects non-finite and non-positive order inputs', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+
+  for (const qty of [NaN, Infinity, 0, -0.001]) {
+    const decision = risk.check(pf, {
+      symbol: 'BTC', side: 'buy', qty, priceUsd: 70_000, feeUsd: 0,
+    });
+    assert.equal(decision.allowed, false, `quantity ${qty} must be rejected`);
+    assert.match(decision.reason ?? '', /invalid order quantity/i);
+  }
+  for (const priceUsd of [NaN, Infinity, 0, -70_000]) {
+    const decision = risk.check(pf, {
+      symbol: 'BTC', side: 'buy', qty: 0.001, priceUsd, feeUsd: 0,
+    });
+    assert.equal(decision.allowed, false, `price ${priceUsd} must be rejected`);
+    assert.match(decision.reason ?? '', /invalid order price/i);
+  }
+
+  for (const [qty, priceUsd] of [
+    [Number.MAX_VALUE, 2],
+    [Number.MIN_VALUE, 0.5],
+  ]) {
+    const decision = risk.check(pf, {
+      symbol: 'BTC', side: 'buy', qty, priceUsd, feeUsd: 0,
+    });
+    assert.equal(decision.allowed, false, `${qty} * ${priceUsd} must be rejected`);
+    assert.match(decision.reason ?? '', /invalid order notional/i);
+  }
+});
+
+test('RiskEngine: allows a buy whose notional plus fee exactly fits cash', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 100.10 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+
+  const decision = risk.check(pf, {
+    symbol: 'BTC', side: 'buy', qty: 0.001, priceUsd: 100_000, feeUsd: 0.10,
+  });
+  assert.equal(decision.allowed, true, decision.reason);
 });
 
 test('RiskEngine: sell is allowed even when caps are exceeded, as long as position exists', async () => {
   const { RiskEngine } = await import('../dist/trading/risk.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const pf = new Portfolio({ startingCashUsd: 1000 });
-  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
   const risk = new RiskEngine({ maxPositionUsd: 1, maxTotalExposureUsd: 1 }); // paranoid caps
 
   const decision = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 72_000 });
@@ -3267,6 +3355,30 @@ test('LiveExchange: placeOrder charges fee on notional and echoes price', async 
   assert.equal(fill.priceUsd, 70_000);
 });
 
+test('ExchangeClient implementations never charge more than the fee they quoted', async () => {
+  const { LiveExchange } = await import('../dist/trading/live-exchange.js');
+  const { MockExchange } = await import('../dist/trading/mock-exchange.js');
+  const { bpsFee, roundUpToCent } = await import('../dist/trading/fees.js');
+  const pricingClient = { async getPrice() { return 'not used for placeOrder'; } };
+  const exchanges = [
+    new MockExchange({ prices: { BTC: 70_000 }, feeBps: 15 }),
+    new LiveExchange({ pricing: pricingClient, feeBps: 15 }),
+  ];
+  // Awkward notional on purpose: 0.1 * 64321.37 * 15 bps = 9.6482055 — a
+  // venue rounding to the cent lands at 9.65, and the estimate must cover it.
+  for (const order of [
+    { symbol: 'BTC', side: 'buy', qty: 0.005, priceUsd: 70_000 },
+    { symbol: 'BTC', side: 'buy', qty: 0.1, priceUsd: 64_321.37 },
+  ]) {
+    for (const exchange of exchanges) {
+      const estimate = await exchange.estimateFee(order);
+      const fill = await exchange.placeOrder(order);
+      assert.ok(fill.feeUsd <= estimate, `${fill.feeUsd} must not exceed the quoted ceiling ${estimate}`);
+      assert.equal(estimate, roundUpToCent(bpsFee(order, 15)), 'estimate is the exact fee rounded up to the cent');
+      assert.ok(roundUpToCent(fill.feeUsd) <= estimate, 'a cent-rounding venue still fits under the ceiling');
+    }
+  }
+});
 test('createTradingCapabilities: TradingPortfolio reports cash, positions, and P&L in markdown', async () => {
   const { createTradingCapabilities } = await import('../dist/tools/trading-execute.js');
   const { TradingEngine } = await import('../dist/trading/engine.js');
@@ -3387,13 +3499,33 @@ test('TradingEngine: executes a compliant order through risk → exchange → po
   assert.ok(Math.abs(portfolio.cashUsd - (1000 - 140.14)) < 1e-9);
 });
 
+test('TradingEngine: blocks a buy when notional fits cash but notional plus fee does not', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { MockExchange } = await import('../dist/trading/mock-exchange.js');
+
+  const portfolio = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  const exchange = new MockExchange({ prices: { BTC: 100_000 }, feeBps: 10 });
+  const engine = new TradingEngine({ portfolio, risk, exchange });
+
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 100_000 });
+  assert.equal(outcome.status, 'blocked');
+  assert.match(outcome.reason ?? '', /insufficient cash/i);
+  assert.equal(portfolio.getPosition('BTC'), undefined);
+  assert.equal(portfolio.cashUsd, 100);
+});
+
 test('TradingEngine: blocks order that violates risk and does NOT touch the exchange', async () => {
   const { TradingEngine } = await import('../dist/trading/engine.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const { RiskEngine } = await import('../dist/trading/risk.js');
 
+  let estimated = 0;
   let placed = 0;
   const fakeExchange = {
+    estimateFee() { estimated++; return 0; },
     async placeOrder() { placed++; throw new Error('should never be called'); },
     async getPrice() { return null; },
   };
@@ -3405,10 +3537,138 @@ test('TradingEngine: blocks order that violates risk and does NOT touch the exch
   const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.01, priceUsd: 70_000 });
   assert.equal(outcome.status, 'blocked');
   assert.match(outcome.reason ?? '', /position cap/i);
+  assert.equal(estimated, 0, 'local risk failures must not request a fee quote');
   assert.equal(placed, 0, 'exchange must not be called when risk blocks the trade');
   assert.equal(portfolio.cashUsd, 1000, 'portfolio must be untouched on block');
 });
 
+test('TradingEngine: returns blocked when the fee estimate fails', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+
+  let placed = 0;
+  const fakeExchange = {
+    async estimateFee() { throw new Error('quote service unavailable'); },
+    async placeOrder() { placed++; throw new Error('should never be called'); },
+    async getPrice() { return null; },
+  };
+  const portfolio = new Portfolio({ startingCashUsd: 1000 });
+  const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+  const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
+
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 });
+  assert.equal(outcome.status, 'blocked');
+  assert.match(outcome.reason ?? '', /unable to estimate exchange fee/i);
+  assert.match(outcome.reason ?? '', /quote service unavailable/i);
+  assert.equal(placed, 0);
+  assert.equal(portfolio.cashUsd, 1000);
+});
+
+test('TradingEngine: an unbookable fill (NaN / negative fee) throws AFTER placeOrder with a reconcile message, and books nothing', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+
+  for (const feeUsd of [NaN, Infinity, -0.01]) {
+    const portfolio = new Portfolio({ startingCashUsd: 1000 });
+    const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+    const fakeExchange = {
+      estimateFee() { return 1; },
+      async placeOrder(order) { return { ...order, feeUsd }; },
+      async getPrice() { return null; },
+    };
+    const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
+
+    await assert.rejects(
+      () => engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 }),
+      /unbookable fill.*fee is.*reconcile clientOrderId [0-9a-f-]{36}.*Do NOT retry/is,
+    );
+    assert.equal(portfolio.getPosition('BTC'), undefined);
+    assert.equal(portfolio.cashUsd, 1000, `fee ${feeUsd} must not mutate accounting`);
+  }
+});
+
+test('TradingEngine: a fill whose fee exceeds the approved estimate is BOOKED and flagged, never discarded', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+
+  const portfolio = new Portfolio({ startingCashUsd: 1000 });
+  const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+  const fakeExchange = {
+    estimateFee() { return 1; },
+    async placeOrder(order) { return { ...order, feeUsd: 1.5 }; }, // venue overcharged by $0.50
+    async getPrice() { return null; },
+  };
+  const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
+
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.equal(outcome.fill.feeUsd, 1.5);
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.001, 'the venue executed — the position must exist locally');
+  assert.ok(Math.abs(portfolio.cashUsd - (1000 - 70 - 1.5)) < 1e-9, 'cash reflects the fee actually charged');
+  assert.equal(outcome.warnings.length, 1);
+  assert.match(outcome.warnings[0], /charged \$1\.5000.*above the approved estimate of \$1\.0000/);
+});
+
+test('TradingEngine: fill fee tolerance boundary — equal and sub-cent overshoot are clean, a cent over is flagged', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const run = async (feeUsd) => {
+    const portfolio = new Portfolio({ startingCashUsd: 1000 });
+    const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+    const exchange = { estimateFee() { return 1; }, async placeOrder(o) { return { ...o, feeUsd }; }, async getPrice() { return null; } };
+    return new TradingEngine({ portfolio, risk, exchange }).openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 });
+  };
+  for (const fee of [1, 1 + 5e-10, 1.004]) {
+    const o = await run(fee);
+    assert.equal(o.status, 'filled');
+    assert.deepEqual(o.warnings, [], `fee ${fee} is within tolerance`);
+  }
+  const over = await run(1.01);
+  assert.equal(over.status, 'filled');
+  assert.equal(over.warnings.length, 1);
+  assert.match(over.warnings[0], /above the approved estimate/);
+});
+test('TradingEngine: a fill that breaches pre-trade risk as delivered is booked and flagged (price drift)', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+
+  const portfolio = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 1000, maxTotalExposureUsd: 1000 });
+  const fakeExchange = {
+    estimateFee() { return 0; },
+    async placeOrder(order) { return { ...order, priceUsd: 101_000, feeUsd: 0 }; },
+    async getPrice() { return null; },
+  };
+  const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
+
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 100_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.001);
+  assert.ok(Math.abs(portfolio.cashUsd - (100 - 101)) < 1e-9, 'cash reflects the fill the venue delivered, even negative');
+  assert.ok(outcome.warnings.some(w => /filled at \$101000, order was priced at \$100000/.test(w)), outcome.warnings.join(' | '));
+  assert.ok(outcome.warnings.some(w => /breached pre-trade risk.*insufficient cash/i.test(w)), outcome.warnings.join(' | '));
+  assert.ok(outcome.warnings.some(w => /cash balance is negative/i.test(w)), outcome.warnings.join(' | '));
+});
+
+test('TradingEngine: a fill with more quantity than ordered is booked and flagged (position cap breach)', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const portfolio = new Portfolio({ startingCashUsd: 10_000 });
+  const risk = new RiskEngine({ maxPositionUsd: 200, maxTotalExposureUsd: 1000 });
+  const exchange = { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, qty: o.qty * 5, feeUsd: 0 }; }, async getPrice() { return null; } };
+  const engine = new TradingEngine({ portfolio, risk, exchange });
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.002, priceUsd: 70_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.01);
+  assert.ok(outcome.warnings.some(w => /filled 0\.01 BTC, order was for 0\.002/.test(w)));
+  assert.ok(outcome.warnings.some(w => /breached pre-trade risk.*position cap/i.test(w)));
+});
 test('TradingEngine: closePosition liquidates an open position and realizes P&L', async () => {
   const { TradingEngine } = await import('../dist/trading/engine.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
@@ -3433,6 +3693,350 @@ test('TradingEngine: closePosition liquidates an open position and realizes P&L'
   assert.ok(portfolio.realizedPnlUsd > 0, 'should realize positive P&L at higher exit price');
 });
 
+
+// ── Fee-aware trading engine: coverage the PR #4 review asked for ──
+
+test('bpsFee: validates inputs and computes notional * bps / 10000; bpsFeeCeiling rounds up to the cent', async () => {
+  const { bpsFee, bpsFeeCeiling, roundUpToCent } = await import('../dist/trading/fees.js');
+  assert.ok(Math.abs(bpsFee({ qty: 0.005, priceUsd: 70_000 }, 15) - 0.525) < 1e-9);
+  assert.equal(bpsFee({ qty: 1, priceUsd: 100 }, 0), 0);
+  for (const qty of [NaN, 0, -1, Infinity]) assert.throws(() => bpsFee({ qty, priceUsd: 100 }, 10), /invalid order quantity/i);
+  for (const priceUsd of [NaN, 0, -1, Infinity]) assert.throws(() => bpsFee({ qty: 1, priceUsd }, 10), /invalid order price/i);
+  for (const bps of [NaN, -1, Infinity]) assert.throws(() => bpsFee({ qty: 1, priceUsd: 100 }, bps), /invalid fee rate/i);
+  assert.equal(bpsFeeCeiling({ qty: 0.1, priceUsd: 64_321.37 }, 10), 6.44); // exact 6.432137
+  assert.equal(bpsFeeCeiling({ qty: 0.005, priceUsd: 70_000 }, 15), 0.53);  // exact 0.525
+  assert.equal(roundUpToCent(6.43), 6.43, 'an exact cent must not round up to the next one');
+  assert.equal(roundUpToCent(6.4300000000000006), 6.43, 'float artefacts of an exact cent stay put');
+  assert.equal(roundUpToCent(0), 0);
+});
+
+test('Portfolio: applyFill rejects invalid side, symbol, qty, price and fee without mutating state', async () => {
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
+  const before = JSON.stringify(pf.snapshot());
+  const cases = [
+    [{ qty: NaN }, /invalid fill quantity/i], [{ qty: 0 }, /invalid fill quantity/i], [{ qty: -1 }, /invalid fill quantity/i], [{ qty: Infinity }, /invalid fill quantity/i],
+    [{ priceUsd: NaN }, /invalid fill price/i], [{ priceUsd: 0 }, /invalid fill price/i], [{ priceUsd: -1 }, /invalid fill price/i],
+    [{ feeUsd: NaN }, /invalid fill fee/i], [{ feeUsd: -0.01 }, /invalid fill fee/i], [{ feeUsd: Infinity }, /invalid fill fee/i], [{ feeUsd: undefined }, /invalid fill fee/i],
+    [{ symbol: '' }, /invalid fill symbol/i],
+  ];
+  for (const side of ['buy', 'sell']) {
+    for (const [override, re] of cases) {
+      assert.throws(() => pf.applyFill({ symbol: 'BTC', side, qty: 0.001, priceUsd: 70_000, feeUsd: 0, ...override }), re);
+      assert.equal(JSON.stringify(pf.snapshot()), before, `state must be untouched for ${side} ${JSON.stringify(override)}`);
+    }
+  }
+  // A side that is neither buy nor sell must not fall into the sell branch.
+  for (const side of ['BUY', 'withdrawal', undefined, 'transfer']) {
+    assert.throws(() => pf.applyFill({ symbol: 'BTC', side, qty: 0.001, priceUsd: 70_000, feeUsd: 0 }), /invalid fill side/i);
+    assert.equal(JSON.stringify(pf.snapshot()), before);
+  }
+  assert.throws(() => new Portfolio({ startingCashUsd: NaN }), /invalid starting cash/i);
+  assert.throws(() => new Portfolio({ startingCashUsd: -1 }), /invalid starting cash/i);
+});
+
+test('Portfolio.validateSnapshot / loadPortfolio: non-finite cash, NaN qty, bad symbols and duplicates are refused (NaN would disarm every cap)', async () => {
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { loadPortfolio } = await import('../dist/trading/store.js');
+  const good = { cashUsd: 100, realizedPnlUsd: 0, positions: [{ symbol: 'BTC', qty: 0.01, avgPriceUsd: 70_000 }] };
+  assert.equal(Portfolio.validateSnapshot(good), null);
+  assert.equal(Portfolio.validateSnapshot({ ...good, cashUsd: -50.5 }), null, 'negative cash is a legitimate (if unhealthy) state');
+  const bad = [
+    [{ ...good, cashUsd: Infinity }, /cashUsd/],
+    [{ ...good, cashUsd: 'lots' }, /cashUsd/],
+    [{ ...good, realizedPnlUsd: NaN }, /realizedPnlUsd/],
+    [{ ...good, positions: [{ symbol: 'BTC', qty: NaN, avgPriceUsd: 1 }] }, /BTC qty/],
+    [{ ...good, positions: [{ symbol: 'BTC', qty: 1, avgPriceUsd: 0 }] }, /BTC avgPriceUsd/],
+    [{ ...good, positions: [{ symbol: '', qty: 1, avgPriceUsd: 1 }] }, /position symbol/],
+    [{ ...good, positions: [{ symbol: 'BTC', qty: 1, avgPriceUsd: 1 }, { symbol: 'BTC', qty: 1, avgPriceUsd: 1 }] }, /Duplicate position/],
+    [{ ...good, positions: 'nope' }, /positions/],
+    [null, /not an object/],
+  ];
+  for (const [snap, re] of bad) {
+    assert.match(Portfolio.validateSnapshot(snap) ?? '', re);
+    assert.throws(() => new Portfolio({ startingCashUsd: 0 }).restore(snap), /Refusing to restore/);
+  }
+  // Through the file: JSON.parse('1e999') is Infinity and typeof says "number".
+  const tmpFile = join(tmpdir(), `franklin-portfolio-bad-${Date.now()}.json`);
+  try {
+    writeFileSync(tmpFile, '{"cashUsd":1e999,"realizedPnlUsd":0,"positions":[]}');
+    assert.equal(loadPortfolio(tmpFile), null);
+    writeFileSync(tmpFile, '{"cashUsd":100,"realizedPnlUsd":0,"positions":[{"symbol":"BTC","qty":"1","avgPriceUsd":1}]}');
+    assert.equal(loadPortfolio(tmpFile), null);
+  } finally {
+    rmSync(tmpFile, { force: true });
+  }
+});
+
+test('RiskEngine: sell orders are validated too — bad qty/price, oversell, and a fee that eats the whole sale are refused', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
+  const risk = new RiskEngine({ maxPositionUsd: 1, maxTotalExposureUsd: 1 }); // paranoid caps: sells still allowed
+  for (const qty of [NaN, 0, -0.001, Infinity]) {
+    const d = risk.check(pf, { symbol: 'BTC', side: 'sell', qty, priceUsd: 70_000 });
+    assert.equal(d.allowed, false); assert.match(d.reason, /invalid order quantity/i);
+  }
+  for (const priceUsd of [NaN, 0, -1]) {
+    const d = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.001, priceUsd });
+    assert.equal(d.allowed, false); assert.match(d.reason, /invalid order price/i);
+  }
+  const over = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.02, priceUsd: 70_000 });
+  assert.equal(over.allowed, false); assert.match(over.reason, /only 0\.01 held/);
+  assert.equal(risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 70_000 }).allowed, true, 'exact holding is fine');
+  const dust = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.00001, priceUsd: 70_000, feeUsd: 1 }); // $0.70 sale, $1 min fee
+  assert.equal(dust.allowed, false); assert.match(dust.reason, /fee .* would consume the whole/i);
+  const badFee = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 70_000, feeUsd: NaN });
+  assert.equal(badFee.allowed, false); assert.match(badFee.reason, /invalid estimated fee/i);
+});
+
+test('RiskEngine: cash is compared at sub-cent precision, so float drift cannot refuse an order sized to the displayed balance', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  // Three fills at 10 bps leave cash at 699.6999999999999, rendered as $699.70.
+  for (let i = 0; i < 3; i++) pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.001, priceUsd: 100_000, feeUsd: 0.1 });
+  assert.ok(pf.cashUsd < 699.7 && pf.cashUsd > 699.69);
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  const fits = risk.check(pf, { symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 6_990, feeUsd: 0.70 }); // 699.00 + 0.70
+  assert.equal(fits.allowed, true, fits.reason);
+  const over = risk.check(pf, { symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 6_990, feeUsd: 0.71 }); // one cent over
+  assert.equal(over.allowed, false);
+  assert.match(over.reason, /insufficient cash/i);
+});
+
+test('RiskEngine: the fee-less pre-check never tells the agent the fee is $0.00', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  const d = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 100_000, feeUsd: 0 });
+  assert.equal(d.allowed, false);
+  assert.match(d.reason, /before exchange fees/);
+  assert.doesNotMatch(d.reason, /\$0\.00 estimated fee/);
+  const withFee = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.001, priceUsd: 100_000, feeUsd: 0.1 });
+  assert.match(withFee.reason, /including \$0\.10 estimated fee/);
+});
+
+test('TradingEngine: a fill for the wrong symbol or side is unbookable — throws with the reconcile id, books nothing', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  for (const override of [{ symbol: 'ETH' }, { side: 'sell' }, { side: 'BUY' }]) {
+    const portfolio = new Portfolio({ startingCashUsd: 1000 });
+    const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+    const fakeExchange = {
+      estimateFee() { return 0; },
+      async placeOrder(order) { return { ...order, feeUsd: 0, ...override }; },
+      async getPrice() { return null; },
+    };
+    const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
+    await assert.rejects(() => engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 }), /unbookable fill.*reconcile clientOrderId/is);
+    assert.equal(portfolio.cashUsd, 1000);
+    assert.equal(portfolio.listPositions().length, 0);
+  }
+  // Case / whitespace differences in the echoed symbol are NOT a mismatch.
+  const portfolio = new Portfolio({ startingCashUsd: 1000 });
+  const engine = new TradingEngine({
+    portfolio,
+    risk: new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 }),
+    exchange: { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, symbol: ' btc ', feeUsd: 0 }; }, async getPrice() { return null; } },
+  });
+  const outcome = await engine.openPosition({ symbol: 'btc', qty: 0.001, priceUsd: 70_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.deepEqual(outcome.warnings, []);
+});
+
+test('TradingEngine: every order carries a fresh clientOrderId that adapters can use as an idempotency key', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { MockExchange } = await import('../dist/trading/mock-exchange.js');
+  const seen = [];
+  const exchange = new MockExchange({ prices: { BTC: 70_000 }, feeBps: 10 });
+  const placeOrder = exchange.placeOrder.bind(exchange);
+  exchange.placeOrder = async (order) => { seen.push(order.clientOrderId); return placeOrder(order); };
+  const engine = new TradingEngine({ portfolio: new Portfolio({ startingCashUsd: 1000 }), risk: new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 }), exchange });
+  const a = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 });
+  const b = await engine.closePosition({ symbol: 'BTC' });
+  assert.equal(a.status, 'filled'); assert.equal(b.status, 'filled');
+  assert.match(a.fill.clientOrderId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(a.fill.clientOrderId, b.fill.clientOrderId);
+  assert.deepEqual(seen, [a.fill.clientOrderId, b.fill.clientOrderId], 'the adapter received the same ids');
+});
+
+test('TradingEngine: fee-quote failures and invalid estimates are blocked with kind fee-quote; venue rejections with kind venue', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const mk = (exchange) => new TradingEngine({ portfolio: new Portfolio({ startingCashUsd: 1000 }), risk: new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 }), exchange });
+  const req = { symbol: 'BTC', qty: 0.001, priceUsd: 70_000 };
+  for (const bad of [NaN, -1, Infinity, 'free', undefined]) {
+    let placed = 0;
+    const o = await mk({ async estimateFee() { return bad; }, async placeOrder() { placed++; throw new Error('never'); }, async getPrice() { return null; } }).openPosition(req);
+    assert.equal(o.status, 'blocked'); assert.equal(o.kind, 'fee-quote');
+    assert.match(o.reason, /invalid fee estimate/i); assert.equal(placed, 0);
+  }
+  const thrown = await mk({ async estimateFee() { throw new Error('quote service unavailable'); }, async placeOrder() { throw new Error('never'); }, async getPrice() { return null; } }).openPosition(req);
+  assert.equal(thrown.status, 'blocked'); assert.equal(thrown.kind, 'fee-quote');
+  const venue = await mk({ estimateFee() { return 0; }, async placeOrder() { throw new Error('insufficient venue balance'); }, async getPrice() { return null; } }).openPosition(req);
+  assert.equal(venue.status, 'blocked'); assert.equal(venue.kind, 'venue');
+  assert.match(venue.reason, /before executing.*insufficient venue balance/i);
+  const risk = await mk({ estimateFee() { return 0; }, async placeOrder() { throw new Error('never'); }, async getPrice() { return null; } }).openPosition({ ...req, qty: 1 });
+  assert.equal(risk.status, 'blocked'); assert.equal(risk.kind, 'risk');
+});
+
+test('TradingEngine: concurrent openPosition calls are serialised — the second sees the cash the first spent', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const portfolio = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  // A slow adapter: both calls are in flight at the same time.
+  const exchange = {
+    async estimateFee() { await new Promise(r => setTimeout(r, 5)); return 0; },
+    async placeOrder(o) { await new Promise(r => setTimeout(r, 5)); return { ...o, feeUsd: 0 }; },
+    async getPrice() { return null; },
+  };
+  const engine = new TradingEngine({ portfolio, risk, exchange });
+  const [a, b] = await Promise.all([
+    engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 60_000 }), // $60
+    engine.openPosition({ symbol: 'ETH', qty: 0.02, priceUsd: 3_000 }),   // $60 — only one can fit
+  ]);
+  assert.equal(a.status, 'filled');
+  assert.equal(b.status, 'blocked');
+  assert.match(b.reason, /insufficient cash/i);
+  assert.equal(portfolio.cashUsd, 40);
+  // A rejection in the queue does not wedge later orders.
+  const engine2 = new TradingEngine({ portfolio: new Portfolio({ startingCashUsd: 1000 }), risk, exchange: { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, feeUsd: NaN }; }, async getPrice() { return null; } } });
+  await assert.rejects(() => engine2.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 60_000 }));
+  const after = await engine2.openPosition({ symbol: 'BTC', qty: 1, priceUsd: 60_000 });
+  assert.equal(after.status, 'blocked', 'the queue still runs after a rejection');
+});
+
+test('TradingEngine: closePosition refuses an oversell BEFORE the venue is asked, and a zero/absent mark blocks with kind price', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const portfolio = new Portfolio({ startingCashUsd: 1000 });
+  portfolio.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 70_000, feeUsd: 0 });
+  let priced = 0, quoted = 0, placed = 0;
+  const exchange = {
+    estimateFee() { quoted++; return 0; },
+    async placeOrder(o) { placed++; return { ...o, feeUsd: 0 }; },
+    async getPrice() { priced++; return 72_000; },
+  };
+  const engine = new TradingEngine({ portfolio, risk: new RiskEngine({ maxPositionUsd: 1e6, maxTotalExposureUsd: 1e6 }), exchange });
+  for (const qty of [0.003, 0, -1, NaN]) {
+    const o = await engine.closePosition({ symbol: 'BTC', qty });
+    assert.equal(o.status, 'blocked', `qty ${qty}`); assert.equal(o.kind, 'risk');
+  }
+  assert.equal(priced + quoted + placed, 0, 'nothing reached the exchange');
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.002);
+
+  for (const mark of [null, 0, -5, NaN]) {
+    const e2 = new TradingEngine({ portfolio, risk: new RiskEngine({ maxPositionUsd: 1e6, maxTotalExposureUsd: 1e6 }), exchange: { ...exchange, async getPrice() { return mark; } } });
+    const o = await e2.closePosition({ symbol: 'BTC' });
+    assert.equal(o.status, 'blocked'); assert.equal(o.kind, 'price');
+    assert.match(o.reason, /no usable price/i);
+  }
+  assert.equal(placed, 0);
+});
+
+test('TradingEngine: closePosition quotes the sell fee, blocks a dust close the fee would eat, and validates the sell fill', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const risk = new RiskEngine({ maxPositionUsd: 1e6, maxTotalExposureUsd: 1e6 });
+  const seed = () => { const pf = new Portfolio({ startingCashUsd: 1000 }); pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 70_000, feeUsd: 0 }); return pf; };
+
+  // Dust: $1 minimum fee on a $0.72 sale.
+  const dustPf = seed();
+  const dust = await new TradingEngine({ portfolio: dustPf, risk, exchange: { estimateFee() { return 1; }, async placeOrder(o) { return { ...o, feeUsd: 1 }; }, async getPrice() { return 72_000; } } })
+    .closePosition({ symbol: 'BTC', qty: 0.00001 });
+  assert.equal(dust.status, 'blocked'); assert.equal(dust.kind, 'risk'); assert.match(dust.reason, /consume the whole/i);
+  assert.equal(dustPf.getPosition('BTC')?.qty, 0.002);
+
+  // Unbookable sell fills: wrong symbol, wrong side, NaN fee, more qty than held.
+  for (const override of [{ symbol: 'ETH' }, { side: 'buy' }, { feeUsd: NaN }, { qty: 0.003 }]) {
+    const pf = seed();
+    const before = JSON.stringify(pf.snapshot());
+    const engine = new TradingEngine({ portfolio: pf, risk, exchange: { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, feeUsd: 0, ...override }; }, async getPrice() { return 72_000; } } });
+    await assert.rejects(() => engine.closePosition({ symbol: 'BTC' }), /unbookable fill.*reconcile clientOrderId/is);
+    assert.equal(JSON.stringify(pf.snapshot()), before, `state untouched for ${JSON.stringify(override)}`);
+  }
+
+  // Overcharged sell fee: booked, flagged.
+  const pf = seed();
+  const engine = new TradingEngine({ portfolio: pf, risk, exchange: { estimateFee() { return 0.15; }, async placeOrder(o) { return { ...o, feeUsd: 0.50 }; }, async getPrice() { return 72_000; } } });
+  const o = await engine.closePosition({ symbol: 'BTC' });
+  assert.equal(o.status, 'filled');
+  assert.equal(pf.getPosition('BTC'), undefined);
+  assert.ok(Math.abs(pf.cashUsd - (1000 - 140 + 144 - 0.5)) < 1e-9);
+  assert.equal(o.warnings.length, 1);
+  assert.match(o.warnings[0], /charged \$0\.5000.*above the approved estimate of \$0\.1500/);
+});
+
+test('LiveExchange: getPrice returns null for a zero, negative, or non-finite mark (CoinGecko reports 0 for delisted coins)', async () => {
+  const { LiveExchange } = await import('../dist/trading/live-exchange.js');
+  for (const price of [0, -1, NaN, Infinity, '0']) {
+    const ex = new LiveExchange({ pricing: { async getPrice() { return { price, change24h: 0, volume24h: 0, marketCap: 0 }; } }, feeBps: 10 });
+    assert.equal(await ex.getPrice('BTC'), null, `price ${price}`);
+  }
+  const ok = new LiveExchange({ pricing: { async getPrice() { return { price: 70_000, change24h: 0, volume24h: 0, marketCap: 0 }; } }, feeBps: 10 });
+  assert.equal(await ok.getPrice('btc'), 70_000);
+});
+
+test('createTradingCapabilities: block advice follows the block kind, and post-execution warnings reach the tool output and the journal', async () => {
+  const { createTradingCapabilities } = await import('../dist/tools/trading-execute.js');
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { TradeLog } = await import('../dist/trading/trade-log.js');
+  const { blockAdvice } = await import('../dist/tools/trading-views.js');
+  assert.match(blockAdvice('risk'), /smaller qty/);
+  assert.doesNotMatch(blockAdvice('fee-quote'), /smaller qty/);
+  assert.match(blockAdvice('fee-quote'), /not a sizing problem/);
+  assert.match(blockAdvice('venue'), /nothing was filled or charged/);
+  assert.match(blockAdvice('price'), /no usable mark price/i);
+
+  const tmpLog = join(tmpdir(), `franklin-trades-${Date.now()}.jsonl`);
+  try {
+    const riskConfig = { maxPositionUsd: 500, maxTotalExposureUsd: 800 };
+    const portfolio = new Portfolio({ startingCashUsd: 1000 });
+    const exchange = {
+      estimateFee() { return 0.05; },
+      async placeOrder(o) { return { ...o, feeUsd: 0.90 }; }, // venue overcharges
+      async getPrice() { return 70_000; },
+    };
+    const engine = new TradingEngine({ portfolio, risk: new RiskEngine(riskConfig), exchange });
+    const tradeLog = new TradeLog(tmpLog);
+    const caps = createTradingCapabilities({ engine, riskConfig, tradeLog });
+    const open = caps.find(c => c.spec.name === 'TradingOpenPosition');
+    const res = await open.execute({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 }, {});
+    assert.ok(!res.isError, res.output);
+    assert.match(res.output, /Order filled/);
+    assert.match(res.output, /Post-execution warnings/);
+    assert.match(res.output, /above the approved estimate/);
+    const entries = tradeLog.all();
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].feeUsd, 0.9);
+    assert.ok(Array.isArray(entries[0].warnings) && entries[0].warnings.length === 1, 'journal carries the warning');
+
+    // Fee-quote outage on the next order: advice must not say "smaller qty".
+    exchange.estimateFee = () => { throw new Error('quote service down'); };
+    const blockedRes = await open.execute({ symbol: 'ETH', qty: 0.01, priceUsd: 3_000 }, {});
+    assert.match(blockedRes.output, /Order blocked/);
+    assert.match(blockedRes.output, /quote service down/);
+    assert.match(blockedRes.output, /not a sizing problem/);
+    assert.doesNotMatch(blockedRes.output, /smaller qty/);
+  } finally {
+    rmSync(tmpLog, { force: true });
+  }
+});
+
 test('portfolio store: save + load roundtrips cash, positions, realized P&L', async () => {
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const { savePortfolio, loadPortfolio } = await import('../dist/trading/store.js');
@@ -3442,7 +4046,7 @@ test('portfolio store: save + load roundtrips cash, positions, realized P&L', as
   try {
     const pf = new Portfolio({ startingCashUsd: 1000 });
     pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0.5 });
-    pf.applyFill({ symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 3_500 });
+    pf.applyFill({ symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 3_500, feeUsd: 0 });
     savePortfolio(pf, tmpFile);
 
     const restored = loadPortfolio(tmpFile);
@@ -3490,8 +4094,8 @@ test('MockExchange: rejects order when price table has no quote for symbol', asy
 test('Portfolio: markToMarket computes unrealized P&L against live price', async () => {
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const pf = new Portfolio({ startingCashUsd: 1000 });
-  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000 });
-  pf.applyFill({ symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 3_500 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
+  pf.applyFill({ symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 3_500, feeUsd: 0 });
 
   const snap = pf.markToMarket({ BTC: 72_000, ETH: 3_400 });
   // BTC: 0.01 * (72000 - 70000) = +20; ETH: 0.1 * (3400 - 3500) = -10
@@ -4337,29 +4941,32 @@ test('dynamic tool visibility: FRANKLIN_DYNAMIC_TOOLS=0 opts out of the split', 
   }
 });
 
-test('gateway-models: estimateCostUsd dispatches per billing_mode with 5% margin', async () => {
+test('gateway-models: estimateCostUsd dispatches per billing_mode with 5% margin + $0.001 fee', async () => {
   const { estimateCostUsd } = await import('../dist/gateway-models.js');
+  // Every paid charge carries the flat $0.001 gateway transaction fee on top
+  // of the 5% margin (upstream transaction-fee.ts; $0 stays $0).
+  const FEE = 0.001;
 
-  // per_image: base * quantity * 1.05
+  // per_image: base * quantity * 1.05 + fee
   const perImage = { id: 'openai/gpt-image-2', name: 'GPT Image 2', billing_mode: 'per_image', categories: ['image'], pricing: { per_image: 0.06 } };
-  assert.equal(estimateCostUsd(perImage, { quantity: 1 }), +(0.06 * 1.05).toFixed(6));
-  assert.equal(estimateCostUsd(perImage, { quantity: 3 }), +(0.06 * 3 * 1.05).toFixed(6));
+  assert.equal(estimateCostUsd(perImage, { quantity: 1 }), +(0.06 * 1.05 + FEE).toFixed(6));
+  assert.equal(estimateCostUsd(perImage, { quantity: 3 }), +(0.06 * 3 * 1.05 + FEE).toFixed(6));
 
-  // per_second: base * duration * 1.05, honors user override
+  // per_second: base * duration * 1.05 + fee, honors user override
   const perSecond = { id: 'bytedance/seedance-2.0-fast', name: 'Seedance Fast', billing_mode: 'per_second', categories: ['video'],
                      pricing: { per_second: 0.15, default_duration_seconds: 5, max_duration_seconds: 10 } };
-  assert.equal(estimateCostUsd(perSecond, { duration_seconds: 5 }), +(0.15 * 5 * 1.05).toFixed(6));
-  assert.equal(estimateCostUsd(perSecond, { duration_seconds: 10 }), +(0.15 * 10 * 1.05).toFixed(6));
+  assert.equal(estimateCostUsd(perSecond, { duration_seconds: 5 }), +(0.15 * 5 * 1.05 + FEE).toFixed(6));
+  assert.equal(estimateCostUsd(perSecond, { duration_seconds: 10 }), +(0.15 * 10 * 1.05 + FEE).toFixed(6));
   // Falls back to default_duration_seconds when unspecified
-  assert.equal(estimateCostUsd(perSecond, {}), +(0.15 * 5 * 1.05).toFixed(6));
+  assert.equal(estimateCostUsd(perSecond, {}), +(0.15 * 5 * 1.05 + FEE).toFixed(6));
 
   // per_track
   const perTrack = { id: 'minimax/music-2.5+', name: 'Minimax Music', billing_mode: 'per_track', categories: ['music'], pricing: { per_track: 0.15 } };
-  assert.equal(estimateCostUsd(perTrack), +(0.15 * 1.05).toFixed(6));
+  assert.equal(estimateCostUsd(perTrack), +(0.15 * 1.05 + FEE).toFixed(6));
 
   // flat
   const flat = { id: 'zai/glm-5.1', name: 'GLM-5.1', billing_mode: 'flat', categories: ['chat'], pricing: { flat: 0.001 } };
-  assert.equal(estimateCostUsd(flat), +(0.001 * 1.05).toFixed(6));
+  assert.equal(estimateCostUsd(flat), +(0.001 * 1.05 + FEE).toFixed(6));
 
   // free always zero
   const free = { id: 'nvidia/glm-4.7', name: 'GLM-4.7', billing_mode: 'free', categories: ['chat'], pricing: { input: 0, output: 0 } };
@@ -4718,18 +5325,28 @@ test('free model catalog: picker, shortcuts, pricing, and weak-model guard stay 
     assert.equal(isWeakModel(entry.id), true, `${entry.id} should receive weak/free-model guardrails`);
   }
 
+  // Refreshed 2026-08-12: `free` + most legacy free aliases now resolve to the
+  // current free default (mistral-nemotron — qwen3-next hit NVIDIA's EOL).
+  // Every target is a $0 nvidia model — the final estimateCost assertion
+  // enforces free-only.
   const freeAliases = {
-    free: 'nvidia/qwen3-coder-480b',
-    glm4: 'nvidia/qwen3-coder-480b',
-    'qwen-think': 'nvidia/qwen3-coder-480b',
-    'qwen-coder': 'nvidia/qwen3-coder-480b',
-    maverick: 'nvidia/llama-4-maverick',
-    'deepseek-free': 'nvidia/qwen3-coder-480b',
-    'gpt-oss': 'nvidia/qwen3-coder-480b',
-    'gpt-oss-small': 'nvidia/qwen3-coder-480b',
-    'mistral-small': 'nvidia/llama-4-maverick',
-    nemotron: 'nvidia/qwen3-coder-480b',
-    devstral: 'nvidia/qwen3-coder-480b',
+    free: 'nvidia/nemotron-nano-9b-v2',
+    qwen: 'nvidia/nemotron-nano-9b-v2',
+    qwen3: 'nvidia/nemotron-nano-9b-v2',
+    glm4: 'nvidia/nemotron-nano-9b-v2',
+    'qwen-think': 'nvidia/nemotron-nano-9b-v2',
+    'qwen-coder': 'nvidia/nemotron-nano-9b-v2',
+    'deepseek-free': 'nvidia/nemotron-nano-9b-v2',
+    'gpt-oss': 'nvidia/nemotron-nano-9b-v2',
+    'gpt-oss-small': 'nvidia/nemotron-nano-9b-v2',
+    'mistral-small': 'nvidia/mistral-nemotron',
+    nemotron: 'nvidia/mistral-nemotron',
+    devstral: 'nvidia/nemotron-nano-9b-v2',
+    maverick: 'nvidia/nemotron-nano-9b-v2',
+    llama: 'nvidia/nemotron-nano-9b-v2',
+    'nano-9b': 'nvidia/nemotron-nano-9b-v2',
+    'nano-vl': 'nvidia/nemotron-nano-12b-v2-vl',
+    'free-vision': 'nvidia/nemotron-nano-12b-v2-vl',
   };
 
   for (const [shortcut, expectedModel] of Object.entries(freeAliases)) {
@@ -4760,10 +5377,16 @@ test('free routing profile stays free across router entry points', async () => {
 
   for (const prompt of prompts) {
     const routed = routeRequest(prompt, 'free');
-    assert.equal(routed.model, 'nvidia/qwen3-coder-480b', `routeRequest free drifted for prompt: ${prompt}`);
+    assert.equal(routed.model, 'nvidia/nemotron-nano-9b-v2', `routeRequest free drifted for prompt: ${prompt}`);
     assert.equal(routed.tier, 'SIMPLE');
     assert.deepEqual(routed.signals, ['free-profile']);
   }
+
+  // Vision turns on the free profile go to the free VL model — the only
+  // vision-capable free id that verifiably serves itself (2026-08-12).
+  const visionRouted = routeRequest('what is in this image?', 'free', true);
+  assert.equal(visionRouted.model, 'nvidia/nemotron-nano-12b-v2-vl');
+  assert.deepEqual(visionRouted.signals, ['free-profile', 'free-vision']);
 
   let classifierCalled = false;
   const asyncRouted = await routeRequestAsync('prove this theorem step by step', 'free', async () => {
@@ -4771,7 +5394,7 @@ test('free routing profile stays free across router entry points', async () => {
     return 'REASONING';
   });
   assert.equal(classifierCalled, false, 'free profile should not spend a classifier call');
-  assert.equal(asyncRouted.model, 'nvidia/qwen3-coder-480b');
+  assert.equal(asyncRouted.model, 'nvidia/nemotron-nano-9b-v2');
   assert.deepEqual(asyncRouted.signals, ['free-profile']);
 
   // Free chain expanded 2026-05-03: was a single-element chain that just
@@ -4780,17 +5403,21 @@ test('free routing profile stays free across router entry points', async () => {
   // gets a real switch instead of thrashing on the same model. Assertion
   // is intentionally membership-based — the exact ordering is tuned in
   // FREE_MODELS_BY_CATEGORY and shouldn't break this test on every tweak.
+  // Every entry is a $0 nvidia model — the free profile must NEVER resolve to
+  // a paid model (a free/empty session silently charging the wallet). This set
+  // membership is the guard; keep it all-free.
   const FREE_GATEWAY_MODELS = new Set([
-    'nvidia/qwen3-coder-480b',
-    'nvidia/glm-4.7',
-    'nvidia/llama-4-maverick',
-    'nvidia/deepseek-v4-flash',
-    'nvidia/nemotron-3-super-120b',
-    'nvidia/mistral-large-3-675b',
+    'nvidia/mistral-nemotron',
+    'nvidia/nemotron-nano-9b-v2',
+    'nvidia/nemotron-nano-12b-v2-vl',
+    // Added 2026-08-19 with the chain promotion. Billed $0 by the gateway and
+    // live-probed serving itself; the guard's job is to keep a PAID id out of
+    // the free chain, not to freeze the roster.
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
   ]);
   for (const tier of ['SIMPLE', 'MEDIUM', 'COMPLEX', 'REASONING']) {
     const resolved = resolveTierToModel(tier, 'free');
-    assert.equal(resolved.model, 'nvidia/qwen3-coder-480b', `resolveTierToModel free drifted for ${tier}`);
+    assert.equal(resolved.model, 'nvidia/nemotron-nano-9b-v2', `resolveTierToModel free drifted for ${tier}`);
     const chain = getFallbackChain(tier, 'free');
     assert.ok(Array.isArray(chain) && chain.length > 0, `free fallback chain empty for ${tier}`);
     for (const m of chain) {
@@ -5262,12 +5889,16 @@ test('collapseRepetitiveTools leaves image-bearing tool_results alone', async ()
   assert.match(trB.content, /\[xxxx.+\.\.\.\]/);
 });
 
-test('kimi: K2.5 picker shortcuts now resolve to K2.6 (gateway retired K2.5)', async () => {
+test('kimi: shortcuts resolve to the K3 flagship; retired K2.x pins follow it', async () => {
+  // K3 became the gateway Kimi flagship 2026-07 (replaced the whole K2.x
+  // line). `kimi`/`k3` and every retired K2.x pin resolve to the flagship.
   const { resolveModel } = await import('../dist/ui/model-picker.js');
-  assert.equal(resolveModel('kimi-k2.5'), 'moonshot/kimi-k2.6');
-  assert.equal(resolveModel('k2.5'), 'moonshot/kimi-k2.6');
-  assert.equal(resolveModel('kimi'), 'moonshot/kimi-k2.6');
-  assert.equal(resolveModel('k2.6'), 'moonshot/kimi-k2.6');
+  assert.equal(resolveModel('kimi'), 'moonshot/kimi-k3');
+  assert.equal(resolveModel('k3'), 'moonshot/kimi-k3');
+  assert.equal(resolveModel('k2.7'), 'moonshot/kimi-k3');
+  assert.equal(resolveModel('k2.6'), 'moonshot/kimi-k3');
+  assert.equal(resolveModel('kimi-k2.5'), 'moonshot/kimi-k3');
+  assert.equal(resolveModel('k2.5'), 'moonshot/kimi-k3');
 });
 
 // ─── Tool failure taxonomy + anomaly detector ───────────────────────────────
@@ -5366,13 +5997,15 @@ test('getToolAnomalies: surfaces a brand-new failure type as Infinity spike', as
 
 // [pruned: dead test block(s) referenced removed module — see git log for original]
 
-test('kimi: picker no longer lists the retired K2.5 entry', async () => {
+test('kimi: picker lists the K3 flagship, not retired K2.x entries', async () => {
   const { PICKER_CATEGORIES } = await import('../dist/ui/model-picker.js');
   const ids = PICKER_CATEGORIES.flatMap((c) => c.models.map((m) => m.id));
+  assert.ok(!ids.includes('moonshot/kimi-k2.7'),
+    'moonshot/kimi-k2.7 should be gone from the picker (retired by the gateway)');
   assert.ok(!ids.includes('moonshot/kimi-k2.5'),
-    'moonshot/kimi-k2.5 should be removed from the picker (retired by the gateway)');
-  assert.ok(ids.includes('moonshot/kimi-k2.6'),
-    'moonshot/kimi-k2.6 must remain in the picker');
+    'moonshot/kimi-k2.5 should be gone from the picker (retired by the gateway)');
+  assert.ok(ids.includes('moonshot/kimi-k3'),
+    'moonshot/kimi-k3 (the current flagship) must be in the picker');
 });
 
 test('kimi: pricing keeps K2.5 entries for legacy session-cost records', async () => {
@@ -5403,30 +6036,41 @@ test('picker trim: hidden entries are gone from the visible list', async () => {
 
 test('picker trim: shortcuts for hidden models still resolve (muscle-memory preserved)', async () => {
   const { resolveModel } = await import('../dist/ui/model-picker.js');
-  assert.equal(resolveModel('opus-4.7'), 'anthropic/claude-opus-4.7');
+  assert.equal(resolveModel('claude'), 'anthropic/claude-opus-5');
+  // Opus 4.8 left the visible picker when Opus 5 superseded it at the same
+  // price — the explicit pin must keep resolving.
+  assert.equal(resolveModel('opus-4.8'), 'anthropic/claude-opus-4.8');
   assert.equal(resolveModel('opus-4.6'), 'anthropic/claude-opus-4.6');
   assert.equal(resolveModel('gpt-5.4'), 'openai/gpt-5.4');
   assert.equal(resolveModel('gpt-5.4-pro'), 'openai/gpt-5.4-pro');
   assert.equal(resolveModel('o1'), 'openai/o1');
   assert.equal(resolveModel('o4'), 'openai/o4-mini');
   assert.equal(resolveModel('nano'), 'openai/gpt-5-nano');
-  // grok promoted to the public flagship grok-4.3 (2026-06-04) — same
-  // flagship-promotion pattern as kimi → k2.6. Explicit pins still resolve.
-  assert.equal(resolveModel('grok'), 'xai/grok-4.3');
+  // grok promoted to the public flagship grok-4.5 (2026-07-14) — same
+  // flagship-promotion pattern as kimi → k2.7. Explicit pins still resolve.
+  assert.equal(resolveModel('grok'), 'xai/grok-4.5');
+  assert.equal(resolveModel('grok-4.3'), 'xai/grok-4.3');
+  // grok-3 / grok-4-0709 / grok-4-1-fast are hidden from /v1/models but
+  // still served (probed 2026-08-29) — explicit pins resolve to the real ids.
   assert.equal(resolveModel('grok-3'), 'xai/grok-3');
   assert.equal(resolveModel('grok-4'), 'xai/grok-4-0709');
+  assert.equal(resolveModel('grok-fast'), 'xai/grok-4-1-fast-reasoning');
+  assert.equal(resolveModel('grok-4.1'), 'xai/grok-4-1-fast-reasoning');
   assert.equal(resolveModel('grok-build'), 'xai/grok-build-0.1');
 });
 
 test('picker trim: hero shortcuts (opus, sonnet, gpt, gemini-3, grok) still in visible list', async () => {
   const { PICKER_CATEGORIES } = await import('../dist/ui/model-picker.js');
   const ids = PICKER_CATEGORIES.flatMap((c) => c.models.map((m) => m.id));
-  assert.ok(ids.includes('anthropic/claude-opus-4.8'));
-  assert.ok(ids.includes('anthropic/claude-sonnet-4.6'));
-  assert.ok(ids.includes('openai/gpt-5.5'));
+  assert.ok(ids.includes('anthropic/claude-opus-5'));
+  assert.ok(ids.includes('anthropic/claude-sonnet-5'));
+  assert.ok(ids.includes('openai/gpt-5.6-sol'));
   assert.ok(ids.includes('google/gemini-3.1-pro'));
-  assert.ok(ids.includes('google/gemini-2.5-pro'));
-  assert.ok(ids.includes('xai/grok-4.3')); // grok-4-0709 hidden on gateway; 4.3 is the public flagship row
+  // Gemini 2.5 Pro lost its row in the 2026-08-19 sync (superseded sibling
+  // directly under 3.1 Pro). `gemini-2.5` still resolves — same "hide the row,
+  // keep the shortcut" pattern the rest of this trim uses.
+  assert.ok(!ids.includes('google/gemini-2.5-pro'));
+  assert.ok(ids.includes('xai/grok-4.5')); // grok-4-0709 hidden on gateway; 4.5 is the public flagship row
 });
 
 test('picker trim: total visible entries dropped meaningfully', async () => {
@@ -6630,18 +7274,20 @@ test('enforceRetention is a no-op when audit log is small', async () => {
 // category. pickFreeFallback selects from per-category chains so trading /
 // research / chat get general-purpose free models first.
 
-test('pickFreeFallback: coding category prefers qwen3-coder first', async () => {
+test('pickFreeFallback: coding category prefers nemotron-nano-9b-v2 first', async () => {
+  // Refreshed 2026-08-12: nemotron-nano-9b-v2 leads every category (the one
+  // free model that serves itself on the streaming path); mistral-nemotron is
+  // the secondary (DEGRADED upstream, non-stream rides the gateway fallback).
+  // qwen3-next-80b-a3b-instruct hit NVIDIA's EOL (410).
   const { pickFreeFallback } = await import('../dist/router/index.js');
   const pick = pickFreeFallback('coding', new Set());
-  assert.equal(pick, 'nvidia/qwen3-coder-480b');
+  assert.equal(pick, 'nvidia/nemotron-nano-9b-v2');
 });
 
 test('pickFreeFallback: trading category skips coder, picks the general workhorse', async () => {
   const { pickFreeFallback } = await import('../dist/router/index.js');
   const pick = pickFreeFallback('trading', new Set());
-  // glm-4.7 dropped 2026-06-07 (NVIDIA NIM hung) — llama-4-maverick is now the
-  // general-purpose lead for non-coding categories.
-  assert.equal(pick, 'nvidia/llama-4-maverick', 'trading should not start with a coder model');
+  assert.equal(pick, 'nvidia/nemotron-nano-9b-v2', 'trading should not start with a coder model');
   assert.notEqual(pick, 'nvidia/qwen3-coder-480b');
 });
 
@@ -6656,12 +7302,14 @@ test('pickFreeFallback: research / chat / creative also skip coder first', async
 
 test('pickFreeFallback: respects alreadyFailed set', async () => {
   const { pickFreeFallback } = await import('../dist/router/index.js');
-  // Coding starts with qwen3-coder. After it fails, next should not be qwen3-coder.
-  const failed = new Set(['nvidia/qwen3-coder-480b']);
+  // Coding starts with nemotron-nano-9b-v2. After it fails, next is the
+  // nano-omni secondary (2026-08-19 refresh — it started serving itself again,
+  // so it displaced the still-degraded mistral-nemotron, which slid to third).
+  const failed = new Set(['nvidia/nemotron-nano-9b-v2']);
   const pick = pickFreeFallback('coding', failed);
-  assert.notEqual(pick, 'nvidia/qwen3-coder-480b');
-  assert.equal(pick, 'nvidia/llama-4-maverick',
-    `after qwen3-coder fails, coding should fall to llama-4-maverick, got ${pick}`);
+  assert.notEqual(pick, 'nvidia/nemotron-nano-9b-v2');
+  assert.equal(pick, 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    `after nemotron-nano-9b-v2 fails, coding should fall to nano-omni, got ${pick}`);
 });
 
 test('pickFreeFallback: unknown category uses default chain (general model first)', async () => {
@@ -6675,9 +7323,9 @@ test('pickFreeFallback: unknown category uses default chain (general model first
 test('pickFreeFallback: returns undefined when every candidate failed', async () => {
   const { pickFreeFallback } = await import('../dist/router/index.js');
   const failed = new Set([
-    'nvidia/qwen3-coder-480b',
-    'nvidia/glm-4.7',
-    'nvidia/llama-4-maverick',
+    'nvidia/mistral-nemotron',
+    'nvidia/nemotron-nano-9b-v2',
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
   ]);
   const pick = pickFreeFallback('trading', failed);
   assert.equal(pick, undefined);
@@ -8199,22 +8847,26 @@ test('vision helpers: isVisionModel allowlist matches curated set', async () => 
   for (const m of [
     'anthropic/claude-opus-4.7',
     'anthropic/claude-sonnet-4.6',
-    'anthropic/claude-haiku-4.5-20251001',
+    'anthropic/claude-haiku-4.5',
     'openai/gpt-5.5',
     'openai/gpt-5-mini',
     'openai/o3',
     'google/gemini-3.1-pro',
     'google/gemini-2.5-flash',
+    'xai/grok-4.3',
     'xai/grok-4-0709',
-    'moonshot/kimi-k2.6',
-    'nvidia/llama-4-maverick',
+    'moonshot/kimi-k3',
+    'zai/glm-5.3-flash',
+    'nvidia/nemotron-nano-12b-v2-vl',
   ]) {
     assert.equal(isVisionModel(m), true, `${m} should be vision-capable`);
   }
 
   // Text-only — should all return false. Includes the failure modes the
   // user reported: deepseek family is entirely text-only; grok-4.1 fast
-  // reasoning dropped vision; codex 5.3 is text-only.
+  // reasoning dropped vision; codex 5.3 is text-only. maverick joined this
+  // list 2026-07-14 — routeRequest() always treated it as text-only, so the
+  // old vision entry was the side that was wrong.
   for (const m of [
     'deepseek/deepseek-v4-pro',
     'deepseek/deepseek-chat',
@@ -8223,6 +8875,7 @@ test('vision helpers: isVisionModel allowlist matches curated set', async () => 
     'xai/grok-4-1-fast-reasoning',
     'openai/gpt-5.3-codex',
     'nvidia/qwen3-coder-480b',
+    'nvidia/llama-4-maverick',
   ]) {
     assert.equal(isVisionModel(m), false, `${m} should be text-only`);
   }
@@ -8319,7 +8972,7 @@ test('vision routing: Auto with image upgrades V4 Pro pick to a vision model', a
 
   // COMPLEX tier primary (Opus) already has vision — no escalation needed
   const complexWithVision = resolveTierToModel('COMPLEX', 'auto', true);
-  assert.equal(complexWithVision.model, 'anthropic/claude-opus-4.8');
+  assert.equal(complexWithVision.model, 'anthropic/claude-opus-5');
 
   // routeRequest path (no analyzer tier) — image-bearing prompt must end on vision
   const routedWithImage = routeRequest('what is in /tmp/foo.png', 'auto', true);
@@ -8336,9 +8989,13 @@ test('vision routing: pickVisionSibling stays within the user-chosen family', as
   assert.ok(isVisionModel(pickVisionSibling('deepseek/deepseek-v4-pro')));
 
   // xai/grok-4-1-fast-reasoning (text-only) → must stay in xai family if any
-  // xai vision sibling exists. grok-4.3 (public flagship, vision-capable,
-  // $1.5/$4) now leads the xai vision list — cheaper than the hidden 4-0709.
-  assert.equal(pickVisionSibling('xai/grok-4-1-fast-reasoning'), 'xai/grok-4.3');
+  // xai vision sibling exists. Asserted by family + capability rather than by
+  // id: the pick moved from grok-4-0709 to grok-4.5 on 2026-08-20 when the
+  // allowlist gained the vision-capable flagship, and pinning the exact id
+  // just made a strictly better answer look like a regression.
+  const grokSwap = pickVisionSibling('xai/grok-4-1-fast-reasoning');
+  assert.ok(grokSwap.startsWith('xai/'), `expected xai sibling, got ${grokSwap}`);
+  assert.ok(isVisionModel(grokSwap));
 
   // openai/gpt-5.3-codex (text-only) → must stay in openai family
   const codexSwap = pickVisionSibling('openai/gpt-5.3-codex');
@@ -8604,4 +9261,213 @@ test('loadMcpConfig: http server auto-disabled without token, enabled with token
     if (trustBackup !== null) writeFileSync(trustFile, trustBackup);
     else rmSync(trustFile, { force: true });
   }
+});
+
+test('vision routing: every flagship bare alias is in the vision allowlist', async () => {
+  const { isVisionModel } = await import('../dist/router/vision.js');
+  const { MODEL_SHORTCUTS } = await import('../dist/ui/model-picker.js');
+
+  // The allowlist in src/router/vision.ts is hand-curated, so it drifts when
+  // the gateway ships a new flagship: grok-4.5 was vision-capable and missing
+  // for weeks, which silently rerouted every image turn on `grok` to a model
+  // the user never chose. The bare aliases are the ones people actually type,
+  // so they are the ones worth pinning — a new flagship that lands without a
+  // vision entry fails here instead of in someone's session.
+  for (const alias of ['claude', 'opus', 'sonnet', 'gpt', 'gemini', 'grok', 'kimi']) {
+    const id = MODEL_SHORTCUTS[alias];
+    assert.ok(id, `bare alias "${alias}" disappeared from MODEL_SHORTCUTS`);
+    assert.ok(
+      isVisionModel(id),
+      `bare alias "${alias}" resolves to ${id}, which is missing from VISION_MODELS — ` +
+        `image turns on it get rerouted to another model`,
+    );
+  }
+});
+
+test('kimi: pricing keeps legacy entries for session-cost records', async () => {
+  const { MODEL_PRICING } = await import('../dist/pricing.js');
+  // Keeping retired model pricing is the same pattern used for
+  // nvidia/gpt-oss-120b and similar — old session-cost records reference these
+  // IDs and must not crash. K3 is the current flagship.
+  assert.ok(MODEL_PRICING['moonshot/kimi-k3']);
+  assert.ok(MODEL_PRICING['moonshot/kimi-k2.7']);
+  assert.ok(MODEL_PRICING['moonshot/kimi-k2.6']);
+  assert.ok(MODEL_PRICING['moonshot/kimi-k2.5']);
+  assert.ok(MODEL_PRICING['nvidia/kimi-k2.5']);
+});
+
+// ─── 3.42.0: router-core d7bc10c + 2026-08-29 catalog sync ────────────────
+//
+// router-core ships its tier chains as committed config, and d7bc10c makes
+// nvidia/step-3.7-flash the free backstop rung of every Auto chain — an id
+// that answers as a different model with its reasoning leaked into content
+// (probed 2026-08-29). `options.unavailableModels` is the core's kill-switch
+// for a rung the host knows is bad; these tests pin that Franklin feeds it,
+// statically (the quarantine) and from runtime observation (a real gateway
+// rejection). Catalog absence alone is deliberately NOT a trigger: every
+// catalog-absent id the core config names still answered on 2026-08-29.
+
+const ROUTER_DEAD_IDS = [
+  'nvidia/step-3.7-flash',
+];
+
+const ROUTER_CORPUS = [
+  'hello',
+  'what is a closure in javascript',
+  'prove that the square root of 2 is irrational, step by step',
+  'refactor src/agent/loop.ts to extract the retry policy into its own module and add tests',
+  'compare BTC and ETH funding rates over the last 30 days and propose a pairs trade',
+  'summarize this 40k-token transcript: ' + 'lorem ipsum '.repeat(4000),
+  'write a haiku about autumn',
+  'debug: TypeError: cannot read properties of undefined (reading "map") at render (App.tsx:42)',
+  'extract every email address from the following text as a JSON array',
+];
+
+test('router kill-switch: Auto never selects an id the gateway no longer serves', async () => {
+  const { routeRequest, getUnavailableModels, resetUnavailableModels } = await import('../dist/router/index.js');
+  resetUnavailableModels();
+  const dead = new Set(getUnavailableModels());
+  for (const id of ROUTER_DEAD_IDS) {
+    assert.ok(dead.has(id), `${id} must be in the static unavailable set`);
+  }
+  for (const prompt of ROUTER_CORPUS) {
+    for (const ctx of [{}, { hasTools: true, toolNames: ['Read', 'Bash', 'Write'] }, { needsVision: true }, { maxOutputTokens: 60_000 }]) {
+      const r = routeRequest(prompt, 'auto', ctx);
+      assert.ok(!dead.has(r.model), `picked dead ${r.model} for ${JSON.stringify(prompt.slice(0, 40))}`);
+      for (const c of r.candidates ?? []) {
+        assert.ok(!dead.has(c), `dead ${c} survived in candidates for ${JSON.stringify(prompt.slice(0, 40))}`);
+      }
+    }
+  }
+});
+
+test('router kill-switch: a runtime observation removes the model from the next decision', async () => {
+  const { routeRequest, markModelUnavailable, isModelUnavailable, resetUnavailableModels } = await import('../dist/router/index.js');
+  resetUnavailableModels();
+  const prompt = 'refactor src/agent/loop.ts to extract the retry policy into its own module and add tests';
+  const before = routeRequest(prompt, 'auto', { hasTools: true, toolNames: ['Read', 'Edit', 'Bash'] });
+  assert.ok(before.model && before.model !== 'blockrun/auto');
+  assert.equal(isModelUnavailable(before.model), false);
+
+  // First observation is recorded; a repeat is a no-op (the loop uses the
+  // boolean to bound re-routes to one per dead id).
+  assert.equal(markModelUnavailable(before.model), true);
+  assert.equal(markModelUnavailable(before.model), false);
+  assert.equal(isModelUnavailable(before.model), true);
+
+  const after = routeRequest(prompt, 'auto', { hasTools: true, toolNames: ['Read', 'Edit', 'Bash'] });
+  assert.notEqual(after.model, before.model, 'the dead id must not be selected again');
+  assert.ok(!(after.candidates ?? []).includes(before.model), 'the dead id must leave the recovery chain too');
+  // The survivor is what the chain would have fallen back to — a real model.
+  assert.ok(after.model.includes('/'), `expected a gateway id, got ${after.model}`);
+
+  resetUnavailableModels();
+  assert.equal(isModelUnavailable(before.model), false);
+  const restored = routeRequest(prompt, 'auto', { hasTools: true, toolNames: ['Read', 'Edit', 'Bash'] });
+  assert.equal(restored.model, before.model, 'reset must restore the original decision');
+});
+
+test('router kill-switch: per-call unavailableModels context is honored', async () => {
+  const { routeRequest, resetUnavailableModels } = await import('../dist/router/index.js');
+  resetUnavailableModels();
+  const prompt = 'what is a closure in javascript';
+  const base = routeRequest(prompt, 'auto', {});
+  const routed = routeRequest(prompt, 'auto', { unavailableModels: [base.model] });
+  assert.notEqual(routed.model, base.model);
+  assert.ok(!(routed.candidates ?? []).includes(base.model));
+  // Scoped to the call — the process-wide set is untouched.
+  assert.equal(routeRequest(prompt, 'auto', {}).model, base.model);
+});
+
+test('router kill-switch: the free profile is not affected by the shared Router set', async () => {
+  const { routeRequest, markModelUnavailable, resetUnavailableModels } = await import('../dist/router/index.js');
+  resetUnavailableModels();
+  const r = routeRequest('hello', 'free');
+  assert.equal(r.model, 'nvidia/nemotron-nano-9b-v2');
+  assert.ok(!r.candidates.includes('nvidia/step-3.7-flash'), 'quarantined free id must not be in the free chain');
+  markModelUnavailable('nvidia/nemotron-nano-9b-v2');
+  // The free chain is Franklin's own (pickFreeFallback walks it with the
+  // per-turn failed set); the kill-switch only feeds the shared Router.
+  assert.equal(routeRequest('hello', 'free').model, 'nvidia/nemotron-nano-9b-v2');
+  resetUnavailableModels();
+});
+
+test('error classifier: a rejected model id is flagged modelUnavailable, request-shape errors are not', async () => {
+  const { classifyAgentError } = await import('../dist/agent/error-classifier.js');
+  const unknown = classifyAgentError('HTTP 400: {"error":"Unknown model: xai/grok-4-1-fast-reasoning"}');
+  assert.equal(unknown.category, 'schema');
+  assert.equal(unknown.modelUnavailable, true);
+  assert.equal(unknown.isTransient, false);
+
+  const gone = classifyAgentError('HTTP 410 Gone: model nvidia/deepseek-v4-flash has been retired by the provider');
+  assert.equal(gone.modelUnavailable, true);
+
+  const bare410 = classifyAgentError('410: this model is no longer served');
+  assert.equal(bare410.modelUnavailable, true);
+
+  // Same category (schema), but the id is fine — the loop must not re-route.
+  const shape = classifyAgentError('400 invalid request: array schema missing items');
+  assert.equal(shape.category, 'schema');
+  assert.equal(shape.modelUnavailable, undefined);
+
+  // A 4100-token count or a 410 in a request id is not an HTTP 410.
+  assert.equal(classifyAgentError('prompt is too long: 4100 tokens over the limit').modelUnavailable, undefined);
+  assert.equal(classifyAgentError('500 internal server error (req_410)').modelUnavailable, undefined);
+});
+
+test('catalog sync 2026-08-29: GLM-5.3 Flash is priced, sized, vision-tagged and pickable', async () => {
+  const { MODEL_PRICING } = await import('../dist/pricing.js');
+  const { getContextWindow } = await import('../dist/agent/tokens.js');
+  const { isVisionModel } = await import('../dist/router/vision.js');
+  const { resolveModel, PICKER_CATEGORIES } = await import('../dist/ui/model-picker.js');
+  assert.deepEqual(MODEL_PRICING['zai/glm-5.3-flash'], { input: 0.15, output: 0.5 });
+  assert.equal(getContextWindow('zai/glm-5.3-flash'), 1_000_000);
+  assert.equal(isVisionModel('zai/glm-5.3-flash'), true);
+  assert.equal(isVisionModel('zai/glm-5.3'), false, 'only the Flash SKU is multimodal in the catalog');
+  assert.equal(resolveModel('glm-flash'), 'zai/glm-5.3-flash');
+  assert.equal(resolveModel('glm-5.3-flash'), 'zai/glm-5.3-flash');
+  const ids = PICKER_CATEGORIES.flatMap((c) => c.models.map((m) => m.id));
+  assert.ok(ids.includes('zai/glm-5.3-flash'), 'GLM-5.3 Flash earns a budget row');
+  assert.ok(!ids.includes('google/gemini-2.5-flash'), 'Gemini 2.5 Flash gave up its row (shortcut stays)');
+  assert.equal(resolveModel('gemini-2.5-flash'), 'google/gemini-2.5-flash');
+});
+
+test('catalog sync 2026-08-29: hidden-but-served ids stay priced, routable and pinnable', async () => {
+  // Every one of these is absent from GET /v1/models and every one answered
+  // (and was charged) through the binary on 2026-08-29. Absence from the
+  // catalog must not retire an id anywhere: not from pricing (the charge is
+  // real), not from the router (the core config still names them), not from
+  // the picker's explicit pins.
+  const { MODEL_PRICING } = await import('../dist/pricing.js');
+  const { isModelUnavailable, resetUnavailableModels } = await import('../dist/router/index.js');
+  const { resolveModel } = await import('../dist/ui/model-picker.js');
+  resetUnavailableModels();
+  const served = {
+    'anthropic/claude-opus-4.6': 'opus-4.6',
+    'xai/grok-4-0709': 'grok-4',
+    'xai/grok-3': 'grok-3',
+    'xai/grok-4-1-fast-reasoning': 'grok-fast',
+    'moonshot/kimi-k2.7': 'moonshot/kimi-k2.7',
+    'openai/gpt-5-nano': 'nano',
+  };
+  for (const [id, pin] of Object.entries(served)) {
+    assert.ok(MODEL_PRICING[id], `${id} must stay priced — the gateway still charges for it`);
+    assert.equal(isModelUnavailable(id), false, `${id} must not be pre-declared dead on catalog absence`);
+    assert.equal(resolveModel(pin), id, `${pin} must keep resolving to the real id`);
+  }
+});
+
+test('proxy: a gateway-rejected routed id feeds the dead-rung kill-switch', async () => {
+  const src = readFileSync(new URL('../src/proxy/server.ts', import.meta.url), 'utf-8');
+  assert.match(src, /routerCandidates\.length > 0 && classifyAgentError\(String\(errorMsg\)\)\.modelUnavailable/,
+    'the 4xx intercept must classify the error and only act on routed requests');
+  assert.match(src, /markModelUnavailable\(finalModel\)/);
+});
+
+test('isBlockedSsrfHost blocks loopback/private/metadata, allows public hosts', async () => {
+  const { isBlockedSsrfHost } = await import('../dist/tools/ssrf.js');
+  for (const h of ['localhost', '127.0.0.1', '169.254.169.254', '10.0.0.5', '192.168.1.1', '172.16.0.1', '::1', '[::1]', '0.0.0.0'])
+    assert.equal(isBlockedSsrfHost(h), true, `${h} must be blocked`);
+  for (const h of ['example.com', '8.8.8.8', 'api.openai.com', '1.1.1.1'])
+    assert.equal(isBlockedSsrfHost(h), false, `${h} must be allowed`);
 });

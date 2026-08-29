@@ -10,6 +10,7 @@
  */
 
 import type { Dialogue, ContentPart, UserContentPart, TextSegment, ImageSegment } from './types.js';
+import { peekGatewayModel, warmGatewayModelsCache } from '../gateway-models.js';
 import { estimateTokens } from './tokens.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -32,35 +33,82 @@ export const ESCALATED_MAX_TOKENS = 65_536;
 /** Per-model max output tokens — prevents requesting more than the model supports */
 const MODEL_MAX_OUTPUT: Record<string, number> = {
   // Opus 4.8 / 4.7 support 128k output per the BlockRun gateway model entry
-  // (maxOutput: 128000). Bumping from 32k to 128k unlocks the full headroom
-  // — runaway generations are gated separately by CAPPED_MAX_TOKENS /
-  // ESCALATED_MAX_TOKENS budgets.
+  // (anthropic/claude-opus-4.8 maxOutput: 128000). Bumping from 32k to
+  // 128k unlocks the full headroom — runaway generations are gated
+  // separately by CAPPED_MAX_TOKENS / ESCALATED_MAX_TOKENS budgets.
+  'anthropic/claude-fable-5': 128_000,
+  'anthropic/claude-opus-5': 128_000,
   'anthropic/claude-opus-4.8': 128_000,
   'anthropic/claude-opus-4.7': 128_000,
   'anthropic/claude-opus-4.6': 32_000,
-  'anthropic/claude-sonnet-4.6': 64_000,
-  'anthropic/claude-haiku-4.5-20251001': 16_384,
-  'openai/gpt-5.5': 32_768,
-  'openai/gpt-5.4': 32_768,
-  'openai/gpt-5-mini': 16_384,
+  'anthropic/claude-opus-4.5': 32_000,
+  'anthropic/claude-sonnet-5': 128_000,
+  'anthropic/claude-sonnet-4.6': 128_000, // Anthropic-documented; gateway corrected 2026-07-21
+  'anthropic/claude-sonnet-4.5': 64_000,
+  // Anthropic documents 64000 for Haiku 4.5. Held at 16384 until 2026-07-21
+  // because the gateway clamped to 8192 — asking for more only inflated the
+  // price quote (quotedOutputTokens scales with the ceiling) while the reply
+  // stayed capped. blockrun#266 corrected the gateway and it is live, so the
+  // real ceiling is now reachable.
+  'anthropic/claude-haiku-4.5': 64_000,
+  'openai/gpt-5.6-sol': 128_000,
+  'openai/gpt-5.6-terra': 128_000,
+  'openai/gpt-5.6-luna': 128_000,
+  // 128000 is measured, not read off the catalog. The earlier probe that
+  // seemed to refute it was invalid — both SDKs rejected max_tokens > 100000
+  // client-side, so nothing reached a provider. Re-probed 2026-07-21 with that
+  // guard bypassed: both accept 128000, as did every model advertising a
+  // ceiling above 100000. The catalog was right; the measurement was broken.
+  //
+  // Franklin does not run that SDK guard on either request path — the agent
+  // loop and the proxy both use raw fetch and import only payment helpers from
+  // @blockrun/llm — so these values are independent of whether the SDK-side
+  // fix lands. (blockrun-llm#27 / blockrun-llm-ts#15, open at time of writing.)
+  'openai/gpt-5.5': 128_000,
+  'openai/gpt-5.4': 128_000,
+  'openai/gpt-5.4-mini': 128_000,
+  'openai/gpt-5.4-nano': 32_768,
+  // Probed accepted at 65536 through the live gateway (2026-07-21) — a real
+  // request, not a catalog reading. Note this is a FLOOR, not a proven
+  // ceiling: 65536 also happens to be ESCALATED_MAX_TOKENS, so nothing here
+  // could distinguish a higher true limit even if one exists.
+  'openai/gpt-5-mini': 65_536,
   'google/gemini-2.5-pro': 65_536,
   'google/gemini-2.5-flash': 65_536,
+  'google/gemini-3.5-flash': 65_536,
   // DeepSeek V4 family — upstream max_output is 65K on V4 Flash + V4 Pro;
   // gateway re-aliased deepseek-chat/-reasoner to V4 Flash modes 2026-05-03.
   'deepseek/deepseek-chat': 65_536,
   'deepseek/deepseek-reasoner': 65_536,
   'deepseek/deepseek-v4-pro': 65_536,
-  // Kimi K2.6 supports 65K output per the BlockRun gateway model entry
-  // (moonshot/kimi-k2.6 max_output: 65536). Without this entry the default
-  // 16K cap left users with 4× headroom on the table for long-form coding
-  // outputs and dashboard scaffolds the model can otherwise emit in a
-  // single response.
+  // Kimi K3 (flagship, 2026-07) supports 65K output per the BlockRun gateway
+  // model entry (max_output: 65536). Without this entry the default 16K cap
+  // left users with 4× headroom on the table for long-form coding outputs
+  // and dashboard scaffolds the model can otherwise emit in a single response.
+  'moonshot/kimi-k3': 65_536,
+  'moonshot/kimi-k2.7': 65_536,
   'moonshot/kimi-k2.6': 65_536,
+  // Qwen3.7 Max — gateway model entry reports max_output: 65536. Same 4×
+  // headroom the K3 entry above recovers; without it the paid model gets the
+  // 16K default and truncates mid-answer, burning USDC on continuation calls.
+  'qwen/qwen3.7-max': 65_536,
 };
 
-/** Get max output tokens for a model */
+/**
+ * Get max output tokens for a model.
+ *
+ * The static table above wins. The gateway catalog is consulted only for
+ * models with no entry — its own max_output values are demonstrably wrong for
+ * models we do have knowledge of (it reports 8192 for claude-haiku-4.5, which
+ * Anthropic documents as 64000), so it is a gap-filler, not a source of truth.
+ */
 export function getMaxOutputTokens(model: string): number {
-  return MODEL_MAX_OUTPUT[model] ?? 16_384;
+  const known = MODEL_MAX_OUTPUT[model];
+  if (known) return known;
+  const live = peekGatewayModel(model)?.max_output;
+  if (live && live > 0) return live;
+  warmGatewayModelsCache();
+  return 16_384;
 }
 
 /** Idle gap (minutes) after which old tool results are cleared.
