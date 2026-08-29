@@ -13,8 +13,30 @@
  */
 
 import type { ExchangeClient } from './mock-exchange.js';
-import type { Portfolio } from './portfolio.js';
+import type { Fill, Portfolio } from './portfolio.js';
 import type { RiskEngine } from './risk.js';
+
+const FEE_COMPARISON_TOLERANCE_USD = 1e-9;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertAcceptableBuyFill(fill: Fill, symbol: string, estimatedFeeUsd: number): void {
+  if (fill.symbol !== symbol || fill.side !== 'buy') {
+    throw new Error(
+      `Exchange returned mismatched fill: expected buy ${symbol}, received ${fill.side} ${fill.symbol}`,
+    );
+  }
+  if (!Number.isFinite(fill.feeUsd) || fill.feeUsd < 0) {
+    throw new Error(`Exchange returned invalid fill fee: ${fill.feeUsd}`);
+  }
+  if (fill.feeUsd > estimatedFeeUsd + FEE_COMPARISON_TOLERANCE_USD) {
+    throw new Error(
+      `Exchange fill fee $${fill.feeUsd} exceeds the approved estimate $${estimatedFeeUsd}`,
+    );
+  }
+}
 
 export interface OpenPositionRequest {
   symbol: string;
@@ -43,22 +65,55 @@ export class TradingEngine {
 
   async openPosition(req: OpenPositionRequest): Promise<Outcome> {
     const { portfolio, risk, exchange } = this.deps;
-    const decision = risk.check(portfolio, {
+    const order = {
       symbol: req.symbol,
-      side: 'buy',
+      side: 'buy' as const,
       qty: req.qty,
       priceUsd: req.priceUsd,
+    };
+    // Reject malformed or obviously over-limit orders before a future
+    // adapter can spend money or rate-limit capacity on a fee quote.
+    const localDecision = risk.check(portfolio, { ...order, feeUsd: 0 });
+    if (!localDecision.allowed) {
+      return { status: 'blocked', reason: localDecision.reason ?? 'blocked by risk engine' };
+    }
+
+    let feeUsd: number;
+    try {
+      feeUsd = await exchange.estimateFee(order);
+    } catch (error) {
+      return {
+        status: 'blocked',
+        reason: `Unable to estimate exchange fee: ${errorMessage(error)}`,
+      };
+    }
+    const decision = risk.check(portfolio, {
+      ...order,
+      feeUsd,
     });
     if (!decision.allowed) {
       return { status: 'blocked', reason: decision.reason ?? 'blocked by risk engine' };
     }
 
-    const fill = await exchange.placeOrder({
-      symbol: req.symbol,
+    const fill = await exchange.placeOrder(order);
+    assertAcceptableBuyFill(fill, order.symbol, feeUsd);
+
+    // Re-evaluate the canonical fill before mutating accounting. This also
+    // catches unexpected quantity/price changes that would breach cash or
+    // exposure limits even when the fee stayed below its ceiling.
+    const fillDecision = risk.check(portfolio, {
+      symbol: fill.symbol,
       side: 'buy',
-      qty: req.qty,
-      priceUsd: req.priceUsd,
+      qty: fill.qty,
+      priceUsd: fill.priceUsd,
+      feeUsd: fill.feeUsd,
     });
+    if (!fillDecision.allowed) {
+      throw new Error(
+        `Exchange fill violates pre-trade risk: ${fillDecision.reason ?? 'blocked by risk engine'}`,
+      );
+    }
+
     portfolio.applyFill(fill);
     return {
       status: 'filled',
@@ -66,7 +121,7 @@ export class TradingEngine {
         symbol: fill.symbol,
         qty: fill.qty,
         priceUsd: fill.priceUsd,
-        feeUsd: fill.feeUsd ?? 0,
+        feeUsd: fill.feeUsd,
       },
     };
   }
@@ -95,7 +150,7 @@ export class TradingEngine {
         symbol: fill.symbol,
         qty: fill.qty,
         priceUsd: fill.priceUsd,
-        feeUsd: fill.feeUsd ?? 0,
+        feeUsd: fill.feeUsd,
       },
     };
   }

@@ -14,8 +14,9 @@
  * can validate behavior without hitting CoinGecko.
  */
 
-import type { ExchangeClient } from './mock-exchange.js';
-import type { Fill, Side } from './portfolio.js';
+import type { ExchangeClient, ExchangeOrder } from './mock-exchange.js';
+import type { Fill } from './portfolio.js';
+import { bpsFee } from './fees.js';
 
 /** Subset of src/trading/data.ts's PriceData that we actually consume. */
 export interface PricingClientResponse {
@@ -52,20 +53,17 @@ export class LiveExchange implements ExchangeClient {
     }
   }
 
-  async placeOrder(order: {
-    symbol: string;
-    side: Side;
-    qty: number;
-    priceUsd: number;
-  }): Promise<Fill> {
-    const notional = order.qty * order.priceUsd;
-    const feeUsd = (notional * this.opts.feeBps) / 10_000;
+  estimateFee(order: ExchangeOrder): number {
+    return bpsFee(order, this.opts.feeBps);
+  }
+
+  async placeOrder(order: ExchangeOrder): Promise<Fill> {
     return {
       symbol: order.symbol,
       side: order.side,
       qty: order.qty,
       priceUsd: order.priceUsd,
-      feeUsd,
+      feeUsd: this.estimateFee(order),
     };
   }
 }

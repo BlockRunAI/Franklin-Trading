@@ -23,6 +23,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Changed
+- `ExchangeClient` now exposes a conservative pre-trade fee estimate, and canonical fills require an explicit fee. Buy-side risk checks validate order inputs, fee estimates, and the returned fill before portfolio accounting. This is a breaking interface change intended for the next minor release.
+
 ### Added
 - Initial fork from upstream [Franklin (brcc) 3.21.9](https://github.com/BlockRunAI/Franklin/tree/v3.21.9).
 - New CLI binary name `franklin-trading`, new npm package name `@blockrun/franklin-trading`.
