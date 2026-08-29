@@ -12,6 +12,7 @@
 import type { Position } from '../trading/portfolio.js';
 import type { Portfolio } from '../trading/portfolio.js';
 import type { RiskConfig } from '../trading/risk.js';
+import type { BlockKind } from '../trading/engine.js';
 import type { TradeLogEntry } from '../trading/trade-log.js';
 
 export function formatUsd(n: number): string {
@@ -99,6 +100,7 @@ export function renderOrderFilled(params: {
   symbol: string;
   fill: { qty: number; priceUsd: number; feeUsd: number };
   portfolio: Portfolio;
+  warnings?: string[];
 }): string {
   const { symbol, fill, portfolio } = params;
   const pos = portfolio.getPosition(symbol);
@@ -107,8 +109,29 @@ export function renderOrderFilled(params: {
     `- Bought ${fill.qty} ${symbol} @ ${formatUsd(fill.priceUsd)} ` +
     `(fee ${formatUsd(fill.feeUsd)})\n` +
     `- Position now: ${pos ? `${pos.qty} ${symbol} @ avg ${formatUsd(pos.avgPriceUsd)}` : '(none)'}\n` +
-    `- Cash remaining: ${formatUsd(portfolio.cashUsd)}`
+    `- Cash remaining: ${formatUsd(portfolio.cashUsd)}` +
+    renderWarnings(params.warnings)
   );
+}
+
+/**
+ * Advice the model gets after a block depends on WHY it was blocked.
+ * "Try a smaller qty" is right for a risk refusal and actively wrong for a
+ * fee-quote outage (it makes the agent shrink and retry, generating repeated
+ * — and for a real adapter, billed — quote calls).
+ */
+export function blockAdvice(kind: BlockKind | undefined): string {
+  switch (kind) {
+    case 'fee-quote':
+      return 'The exchange could not quote a fee. This is not a sizing problem — do not shrink the order. Retry later or report the adapter error.';
+    case 'price':
+      return 'No usable mark price is available right now, so the position cannot be valued or closed. Retry when the market has a quote.';
+    case 'venue':
+      return 'The exchange rejected the submission before executing — nothing was filled or charged. Read the reason; do not retry blindly.';
+    case 'risk':
+    default:
+      return 'Try a smaller qty, or close other positions first to free up exposure headroom.';
+  }
 }
 
 export function renderOrderBlocked(params: {
@@ -116,13 +139,43 @@ export function renderOrderBlocked(params: {
   qty: number;
   priceUsd: number;
   reason: string;
+  kind?: BlockKind;
 }): string {
   return (
     `## Order blocked\n` +
     `- Symbol: ${params.symbol}\n` +
     `- Attempted: buy ${params.qty} @ ${formatUsd(params.priceUsd)}\n` +
     `- Reason: ${params.reason}\n\n` +
-    `Try a smaller qty, or close other positions first to free up exposure headroom.`
+    blockAdvice(params.kind)
+  );
+}
+
+export function renderCloseBlocked(params: {
+  symbol: string;
+  qty?: number;
+  reason: string;
+  kind?: BlockKind;
+}): string {
+  return (
+    `## Close blocked\n` +
+    `- Symbol: ${params.symbol}\n` +
+    (params.qty != null ? `- Attempted: sell ${params.qty}\n` : '') +
+    `- Reason: ${params.reason}\n\n` +
+    blockAdvice(params.kind)
+  );
+}
+
+/**
+ * Post-execution warnings are rendered ABOVE the fill details so the model
+ * cannot miss them: the trade is booked, but the venue did not deliver what
+ * the risk check approved.
+ */
+export function renderWarnings(warnings: string[] | undefined): string {
+  if (!warnings || warnings.length === 0) return '';
+  return (
+    `\n\n**⚠ Post-execution warnings (fill is booked; the venue deviated from what was approved):**\n` +
+    warnings.map(w => `- ${w}`).join('\n') +
+    `\n\nDo not open further positions until this is understood.`
   );
 }
 
@@ -131,6 +184,7 @@ export function renderPositionClosed(params: {
   fill: { qty: number; priceUsd: number; feeUsd: number };
   tradeRealized: number;
   portfolio: Portfolio;
+  warnings?: string[];
 }): string {
   const { symbol, fill, tradeRealized, portfolio } = params;
   const remaining = portfolio.getPosition(symbol);
@@ -141,7 +195,8 @@ export function renderPositionClosed(params: {
     `- Realized on this trade: ${formatUsd(tradeRealized)}\n` +
     `- Remaining ${symbol}: ${remaining ? `${remaining.qty} @ avg ${formatUsd(remaining.avgPriceUsd)}` : '(flat)'}\n` +
     `- Cash: ${formatUsd(portfolio.cashUsd)} · ` +
-    `Session realized P&L: ${formatUsd(portfolio.realizedPnlUsd)}`
+    `Session realized P&L: ${formatUsd(portfolio.realizedPnlUsd)}` +
+    renderWarnings(params.warnings)
   );
 }
 

@@ -69,6 +69,13 @@ export interface TradeLogEntry {
   review?: string;
   /** Computed at append time so portfolio reads don't re-score on every render. */
   qualityScore?: QualityScore;
+  /**
+   * Post-execution flags from the engine (fee above the approved estimate,
+   * fill breaching a cap it was approved under). The fill is booked either
+   * way; this is the audit trail that says the venue did not deliver what
+   * the risk check approved.
+   */
+  warnings?: string[];
 }
 
 export class TradeLog {

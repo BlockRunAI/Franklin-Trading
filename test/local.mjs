@@ -3355,23 +3355,30 @@ test('LiveExchange: placeOrder charges fee on notional and echoes price', async 
   assert.equal(fill.priceUsd, 70_000);
 });
 
-test('ExchangeClient implementations use the quoted fee for their fills', async () => {
+test('ExchangeClient implementations never charge more than the fee they quoted', async () => {
   const { LiveExchange } = await import('../dist/trading/live-exchange.js');
   const { MockExchange } = await import('../dist/trading/mock-exchange.js');
-  const order = { symbol: 'BTC', side: 'buy', qty: 0.005, priceUsd: 70_000 };
+  const { bpsFee, roundUpToCent } = await import('../dist/trading/fees.js');
   const pricingClient = { async getPrice() { return 'not used for placeOrder'; } };
   const exchanges = [
     new MockExchange({ prices: { BTC: 70_000 }, feeBps: 15 }),
     new LiveExchange({ pricing: pricingClient, feeBps: 15 }),
   ];
-
-  for (const exchange of exchanges) {
-    const estimate = await exchange.estimateFee(order);
-    const fill = await exchange.placeOrder(order);
-    assert.equal(fill.feeUsd, estimate);
+  // Awkward notional on purpose: 0.1 * 64321.37 * 15 bps = 9.6482055 — a
+  // venue rounding to the cent lands at 9.65, and the estimate must cover it.
+  for (const order of [
+    { symbol: 'BTC', side: 'buy', qty: 0.005, priceUsd: 70_000 },
+    { symbol: 'BTC', side: 'buy', qty: 0.1, priceUsd: 64_321.37 },
+  ]) {
+    for (const exchange of exchanges) {
+      const estimate = await exchange.estimateFee(order);
+      const fill = await exchange.placeOrder(order);
+      assert.ok(fill.feeUsd <= estimate, `${fill.feeUsd} must not exceed the quoted ceiling ${estimate}`);
+      assert.equal(estimate, roundUpToCent(bpsFee(order, 15)), 'estimate is the exact fee rounded up to the cent');
+      assert.ok(roundUpToCent(fill.feeUsd) <= estimate, 'a cent-rounding venue still fits under the ceiling');
+    }
   }
 });
-
 test('createTradingCapabilities: TradingPortfolio reports cash, positions, and P&L in markdown', async () => {
   const { createTradingCapabilities } = await import('../dist/tools/trading-execute.js');
   const { TradingEngine } = await import('../dist/trading/engine.js');
@@ -3558,12 +3565,12 @@ test('TradingEngine: returns blocked when the fee estimate fails', async () => {
   assert.equal(portfolio.cashUsd, 1000);
 });
 
-test('TradingEngine: rejects invalid or underestimated fill fees before accounting', async () => {
+test('TradingEngine: an unbookable fill (NaN / negative fee) throws AFTER placeOrder with a reconcile message, and books nothing', async () => {
   const { TradingEngine } = await import('../dist/trading/engine.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const { RiskEngine } = await import('../dist/trading/risk.js');
 
-  for (const feeUsd of [NaN, Infinity, -0.01, 1.01]) {
+  for (const feeUsd of [NaN, Infinity, -0.01]) {
     const portfolio = new Portfolio({ startingCashUsd: 1000 });
     const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
     const fakeExchange = {
@@ -3575,14 +3582,57 @@ test('TradingEngine: rejects invalid or underestimated fill fees before accounti
 
     await assert.rejects(
       () => engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 }),
-      /invalid fill fee|exceeds the approved estimate/i,
+      /unbookable fill.*fee is.*reconcile clientOrderId [0-9a-f-]{36}.*Do NOT retry/is,
     );
     assert.equal(portfolio.getPosition('BTC'), undefined);
     assert.equal(portfolio.cashUsd, 1000, `fee ${feeUsd} must not mutate accounting`);
   }
 });
 
-test('TradingEngine: re-checks the actual fill against risk before accounting', async () => {
+test('TradingEngine: a fill whose fee exceeds the approved estimate is BOOKED and flagged, never discarded', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+
+  const portfolio = new Portfolio({ startingCashUsd: 1000 });
+  const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+  const fakeExchange = {
+    estimateFee() { return 1; },
+    async placeOrder(order) { return { ...order, feeUsd: 1.5 }; }, // venue overcharged by $0.50
+    async getPrice() { return null; },
+  };
+  const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
+
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.equal(outcome.fill.feeUsd, 1.5);
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.001, 'the venue executed — the position must exist locally');
+  assert.ok(Math.abs(portfolio.cashUsd - (1000 - 70 - 1.5)) < 1e-9, 'cash reflects the fee actually charged');
+  assert.equal(outcome.warnings.length, 1);
+  assert.match(outcome.warnings[0], /charged \$1\.5000.*above the approved estimate of \$1\.0000/);
+});
+
+test('TradingEngine: fill fee tolerance boundary — equal and sub-cent overshoot are clean, a cent over is flagged', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const run = async (feeUsd) => {
+    const portfolio = new Portfolio({ startingCashUsd: 1000 });
+    const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+    const exchange = { estimateFee() { return 1; }, async placeOrder(o) { return { ...o, feeUsd }; }, async getPrice() { return null; } };
+    return new TradingEngine({ portfolio, risk, exchange }).openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 });
+  };
+  for (const fee of [1, 1 + 5e-10, 1.004]) {
+    const o = await run(fee);
+    assert.equal(o.status, 'filled');
+    assert.deepEqual(o.warnings, [], `fee ${fee} is within tolerance`);
+  }
+  const over = await run(1.01);
+  assert.equal(over.status, 'filled');
+  assert.equal(over.warnings.length, 1);
+  assert.match(over.warnings[0], /above the approved estimate/);
+});
+test('TradingEngine: a fill that breaches pre-trade risk as delivered is booked and flagged (price drift)', async () => {
   const { TradingEngine } = await import('../dist/trading/engine.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
   const { RiskEngine } = await import('../dist/trading/risk.js');
@@ -3596,14 +3646,29 @@ test('TradingEngine: re-checks the actual fill against risk before accounting', 
   };
   const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
 
-  await assert.rejects(
-    () => engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 100_000 }),
-    /fill violates pre-trade risk.*insufficient cash/i,
-  );
-  assert.equal(portfolio.getPosition('BTC'), undefined);
-  assert.equal(portfolio.cashUsd, 100);
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 100_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.001);
+  assert.ok(Math.abs(portfolio.cashUsd - (100 - 101)) < 1e-9, 'cash reflects the fill the venue delivered, even negative');
+  assert.ok(outcome.warnings.some(w => /filled at \$101000, order was priced at \$100000/.test(w)), outcome.warnings.join(' | '));
+  assert.ok(outcome.warnings.some(w => /breached pre-trade risk.*insufficient cash/i.test(w)), outcome.warnings.join(' | '));
+  assert.ok(outcome.warnings.some(w => /cash balance is negative/i.test(w)), outcome.warnings.join(' | '));
 });
 
+test('TradingEngine: a fill with more quantity than ordered is booked and flagged (position cap breach)', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const portfolio = new Portfolio({ startingCashUsd: 10_000 });
+  const risk = new RiskEngine({ maxPositionUsd: 200, maxTotalExposureUsd: 1000 });
+  const exchange = { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, qty: o.qty * 5, feeUsd: 0 }; }, async getPrice() { return null; } };
+  const engine = new TradingEngine({ portfolio, risk, exchange });
+  const outcome = await engine.openPosition({ symbol: 'BTC', qty: 0.002, priceUsd: 70_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.01);
+  assert.ok(outcome.warnings.some(w => /filled 0\.01 BTC, order was for 0\.002/.test(w)));
+  assert.ok(outcome.warnings.some(w => /breached pre-trade risk.*position cap/i.test(w)));
+});
 test('TradingEngine: closePosition liquidates an open position and realizes P&L', async () => {
   const { TradingEngine } = await import('../dist/trading/engine.js');
   const { Portfolio } = await import('../dist/trading/portfolio.js');
@@ -3626,6 +3691,350 @@ test('TradingEngine: closePosition liquidates an open position and realizes P&L'
   // Net cash: 1000 - 140.14 + 143.856 = 1003.716
   assert.ok(Math.abs(portfolio.cashUsd - 1003.716) < 1e-6);
   assert.ok(portfolio.realizedPnlUsd > 0, 'should realize positive P&L at higher exit price');
+});
+
+
+// ── Fee-aware trading engine: coverage the PR #4 review asked for ──
+
+test('bpsFee: validates inputs and computes notional * bps / 10000; bpsFeeCeiling rounds up to the cent', async () => {
+  const { bpsFee, bpsFeeCeiling, roundUpToCent } = await import('../dist/trading/fees.js');
+  assert.ok(Math.abs(bpsFee({ qty: 0.005, priceUsd: 70_000 }, 15) - 0.525) < 1e-9);
+  assert.equal(bpsFee({ qty: 1, priceUsd: 100 }, 0), 0);
+  for (const qty of [NaN, 0, -1, Infinity]) assert.throws(() => bpsFee({ qty, priceUsd: 100 }, 10), /invalid order quantity/i);
+  for (const priceUsd of [NaN, 0, -1, Infinity]) assert.throws(() => bpsFee({ qty: 1, priceUsd }, 10), /invalid order price/i);
+  for (const bps of [NaN, -1, Infinity]) assert.throws(() => bpsFee({ qty: 1, priceUsd: 100 }, bps), /invalid fee rate/i);
+  assert.equal(bpsFeeCeiling({ qty: 0.1, priceUsd: 64_321.37 }, 10), 6.44); // exact 6.432137
+  assert.equal(bpsFeeCeiling({ qty: 0.005, priceUsd: 70_000 }, 15), 0.53);  // exact 0.525
+  assert.equal(roundUpToCent(6.43), 6.43, 'an exact cent must not round up to the next one');
+  assert.equal(roundUpToCent(6.4300000000000006), 6.43, 'float artefacts of an exact cent stay put');
+  assert.equal(roundUpToCent(0), 0);
+});
+
+test('Portfolio: applyFill rejects invalid side, symbol, qty, price and fee without mutating state', async () => {
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
+  const before = JSON.stringify(pf.snapshot());
+  const cases = [
+    [{ qty: NaN }, /invalid fill quantity/i], [{ qty: 0 }, /invalid fill quantity/i], [{ qty: -1 }, /invalid fill quantity/i], [{ qty: Infinity }, /invalid fill quantity/i],
+    [{ priceUsd: NaN }, /invalid fill price/i], [{ priceUsd: 0 }, /invalid fill price/i], [{ priceUsd: -1 }, /invalid fill price/i],
+    [{ feeUsd: NaN }, /invalid fill fee/i], [{ feeUsd: -0.01 }, /invalid fill fee/i], [{ feeUsd: Infinity }, /invalid fill fee/i], [{ feeUsd: undefined }, /invalid fill fee/i],
+    [{ symbol: '' }, /invalid fill symbol/i],
+  ];
+  for (const side of ['buy', 'sell']) {
+    for (const [override, re] of cases) {
+      assert.throws(() => pf.applyFill({ symbol: 'BTC', side, qty: 0.001, priceUsd: 70_000, feeUsd: 0, ...override }), re);
+      assert.equal(JSON.stringify(pf.snapshot()), before, `state must be untouched for ${side} ${JSON.stringify(override)}`);
+    }
+  }
+  // A side that is neither buy nor sell must not fall into the sell branch.
+  for (const side of ['BUY', 'withdrawal', undefined, 'transfer']) {
+    assert.throws(() => pf.applyFill({ symbol: 'BTC', side, qty: 0.001, priceUsd: 70_000, feeUsd: 0 }), /invalid fill side/i);
+    assert.equal(JSON.stringify(pf.snapshot()), before);
+  }
+  assert.throws(() => new Portfolio({ startingCashUsd: NaN }), /invalid starting cash/i);
+  assert.throws(() => new Portfolio({ startingCashUsd: -1 }), /invalid starting cash/i);
+});
+
+test('Portfolio.validateSnapshot / loadPortfolio: non-finite cash, NaN qty, bad symbols and duplicates are refused (NaN would disarm every cap)', async () => {
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { loadPortfolio } = await import('../dist/trading/store.js');
+  const good = { cashUsd: 100, realizedPnlUsd: 0, positions: [{ symbol: 'BTC', qty: 0.01, avgPriceUsd: 70_000 }] };
+  assert.equal(Portfolio.validateSnapshot(good), null);
+  assert.equal(Portfolio.validateSnapshot({ ...good, cashUsd: -50.5 }), null, 'negative cash is a legitimate (if unhealthy) state');
+  const bad = [
+    [{ ...good, cashUsd: Infinity }, /cashUsd/],
+    [{ ...good, cashUsd: 'lots' }, /cashUsd/],
+    [{ ...good, realizedPnlUsd: NaN }, /realizedPnlUsd/],
+    [{ ...good, positions: [{ symbol: 'BTC', qty: NaN, avgPriceUsd: 1 }] }, /BTC qty/],
+    [{ ...good, positions: [{ symbol: 'BTC', qty: 1, avgPriceUsd: 0 }] }, /BTC avgPriceUsd/],
+    [{ ...good, positions: [{ symbol: '', qty: 1, avgPriceUsd: 1 }] }, /position symbol/],
+    [{ ...good, positions: [{ symbol: 'BTC', qty: 1, avgPriceUsd: 1 }, { symbol: 'BTC', qty: 1, avgPriceUsd: 1 }] }, /Duplicate position/],
+    [{ ...good, positions: 'nope' }, /positions/],
+    [null, /not an object/],
+  ];
+  for (const [snap, re] of bad) {
+    assert.match(Portfolio.validateSnapshot(snap) ?? '', re);
+    assert.throws(() => new Portfolio({ startingCashUsd: 0 }).restore(snap), /Refusing to restore/);
+  }
+  // Through the file: JSON.parse('1e999') is Infinity and typeof says "number".
+  const tmpFile = join(tmpdir(), `franklin-portfolio-bad-${Date.now()}.json`);
+  try {
+    writeFileSync(tmpFile, '{"cashUsd":1e999,"realizedPnlUsd":0,"positions":[]}');
+    assert.equal(loadPortfolio(tmpFile), null);
+    writeFileSync(tmpFile, '{"cashUsd":100,"realizedPnlUsd":0,"positions":[{"symbol":"BTC","qty":"1","avgPriceUsd":1}]}');
+    assert.equal(loadPortfolio(tmpFile), null);
+  } finally {
+    rmSync(tmpFile, { force: true });
+  }
+});
+
+test('RiskEngine: sell orders are validated too — bad qty/price, oversell, and a fee that eats the whole sale are refused', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.01, priceUsd: 70_000, feeUsd: 0 });
+  const risk = new RiskEngine({ maxPositionUsd: 1, maxTotalExposureUsd: 1 }); // paranoid caps: sells still allowed
+  for (const qty of [NaN, 0, -0.001, Infinity]) {
+    const d = risk.check(pf, { symbol: 'BTC', side: 'sell', qty, priceUsd: 70_000 });
+    assert.equal(d.allowed, false); assert.match(d.reason, /invalid order quantity/i);
+  }
+  for (const priceUsd of [NaN, 0, -1]) {
+    const d = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.001, priceUsd });
+    assert.equal(d.allowed, false); assert.match(d.reason, /invalid order price/i);
+  }
+  const over = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.02, priceUsd: 70_000 });
+  assert.equal(over.allowed, false); assert.match(over.reason, /only 0\.01 held/);
+  assert.equal(risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 70_000 }).allowed, true, 'exact holding is fine');
+  const dust = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.00001, priceUsd: 70_000, feeUsd: 1 }); // $0.70 sale, $1 min fee
+  assert.equal(dust.allowed, false); assert.match(dust.reason, /fee .* would consume the whole/i);
+  const badFee = risk.check(pf, { symbol: 'BTC', side: 'sell', qty: 0.01, priceUsd: 70_000, feeUsd: NaN });
+  assert.equal(badFee.allowed, false); assert.match(badFee.reason, /invalid estimated fee/i);
+});
+
+test('RiskEngine: cash is compared at sub-cent precision, so float drift cannot refuse an order sized to the displayed balance', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 1000 });
+  // Three fills at 10 bps leave cash at 699.6999999999999, rendered as $699.70.
+  for (let i = 0; i < 3; i++) pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.001, priceUsd: 100_000, feeUsd: 0.1 });
+  assert.ok(pf.cashUsd < 699.7 && pf.cashUsd > 699.69);
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  const fits = risk.check(pf, { symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 6_990, feeUsd: 0.70 }); // 699.00 + 0.70
+  assert.equal(fits.allowed, true, fits.reason);
+  const over = risk.check(pf, { symbol: 'ETH', side: 'buy', qty: 0.1, priceUsd: 6_990, feeUsd: 0.71 }); // one cent over
+  assert.equal(over.allowed, false);
+  assert.match(over.reason, /insufficient cash/i);
+});
+
+test('RiskEngine: the fee-less pre-check never tells the agent the fee is $0.00', async () => {
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const pf = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  const d = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 100_000, feeUsd: 0 });
+  assert.equal(d.allowed, false);
+  assert.match(d.reason, /before exchange fees/);
+  assert.doesNotMatch(d.reason, /\$0\.00 estimated fee/);
+  const withFee = risk.check(pf, { symbol: 'BTC', side: 'buy', qty: 0.001, priceUsd: 100_000, feeUsd: 0.1 });
+  assert.match(withFee.reason, /including \$0\.10 estimated fee/);
+});
+
+test('TradingEngine: a fill for the wrong symbol or side is unbookable — throws with the reconcile id, books nothing', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  for (const override of [{ symbol: 'ETH' }, { side: 'sell' }, { side: 'BUY' }]) {
+    const portfolio = new Portfolio({ startingCashUsd: 1000 });
+    const risk = new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 });
+    const fakeExchange = {
+      estimateFee() { return 0; },
+      async placeOrder(order) { return { ...order, feeUsd: 0, ...override }; },
+      async getPrice() { return null; },
+    };
+    const engine = new TradingEngine({ portfolio, risk, exchange: fakeExchange });
+    await assert.rejects(() => engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 }), /unbookable fill.*reconcile clientOrderId/is);
+    assert.equal(portfolio.cashUsd, 1000);
+    assert.equal(portfolio.listPositions().length, 0);
+  }
+  // Case / whitespace differences in the echoed symbol are NOT a mismatch.
+  const portfolio = new Portfolio({ startingCashUsd: 1000 });
+  const engine = new TradingEngine({
+    portfolio,
+    risk: new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 }),
+    exchange: { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, symbol: ' btc ', feeUsd: 0 }; }, async getPrice() { return null; } },
+  });
+  const outcome = await engine.openPosition({ symbol: 'btc', qty: 0.001, priceUsd: 70_000 });
+  assert.equal(outcome.status, 'filled');
+  assert.deepEqual(outcome.warnings, []);
+});
+
+test('TradingEngine: every order carries a fresh clientOrderId that adapters can use as an idempotency key', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { MockExchange } = await import('../dist/trading/mock-exchange.js');
+  const seen = [];
+  const exchange = new MockExchange({ prices: { BTC: 70_000 }, feeBps: 10 });
+  const placeOrder = exchange.placeOrder.bind(exchange);
+  exchange.placeOrder = async (order) => { seen.push(order.clientOrderId); return placeOrder(order); };
+  const engine = new TradingEngine({ portfolio: new Portfolio({ startingCashUsd: 1000 }), risk: new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 }), exchange });
+  const a = await engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 });
+  const b = await engine.closePosition({ symbol: 'BTC' });
+  assert.equal(a.status, 'filled'); assert.equal(b.status, 'filled');
+  assert.match(a.fill.clientOrderId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(a.fill.clientOrderId, b.fill.clientOrderId);
+  assert.deepEqual(seen, [a.fill.clientOrderId, b.fill.clientOrderId], 'the adapter received the same ids');
+});
+
+test('TradingEngine: fee-quote failures and invalid estimates are blocked with kind fee-quote; venue rejections with kind venue', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const mk = (exchange) => new TradingEngine({ portfolio: new Portfolio({ startingCashUsd: 1000 }), risk: new RiskEngine({ maxPositionUsd: 500, maxTotalExposureUsd: 800 }), exchange });
+  const req = { symbol: 'BTC', qty: 0.001, priceUsd: 70_000 };
+  for (const bad of [NaN, -1, Infinity, 'free', undefined]) {
+    let placed = 0;
+    const o = await mk({ async estimateFee() { return bad; }, async placeOrder() { placed++; throw new Error('never'); }, async getPrice() { return null; } }).openPosition(req);
+    assert.equal(o.status, 'blocked'); assert.equal(o.kind, 'fee-quote');
+    assert.match(o.reason, /invalid fee estimate/i); assert.equal(placed, 0);
+  }
+  const thrown = await mk({ async estimateFee() { throw new Error('quote service unavailable'); }, async placeOrder() { throw new Error('never'); }, async getPrice() { return null; } }).openPosition(req);
+  assert.equal(thrown.status, 'blocked'); assert.equal(thrown.kind, 'fee-quote');
+  const venue = await mk({ estimateFee() { return 0; }, async placeOrder() { throw new Error('insufficient venue balance'); }, async getPrice() { return null; } }).openPosition(req);
+  assert.equal(venue.status, 'blocked'); assert.equal(venue.kind, 'venue');
+  assert.match(venue.reason, /before executing.*insufficient venue balance/i);
+  const risk = await mk({ estimateFee() { return 0; }, async placeOrder() { throw new Error('never'); }, async getPrice() { return null; } }).openPosition({ ...req, qty: 1 });
+  assert.equal(risk.status, 'blocked'); assert.equal(risk.kind, 'risk');
+});
+
+test('TradingEngine: concurrent openPosition calls are serialised — the second sees the cash the first spent', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const portfolio = new Portfolio({ startingCashUsd: 100 });
+  const risk = new RiskEngine({ maxPositionUsd: 10_000, maxTotalExposureUsd: 10_000 });
+  // A slow adapter: both calls are in flight at the same time.
+  const exchange = {
+    async estimateFee() { await new Promise(r => setTimeout(r, 5)); return 0; },
+    async placeOrder(o) { await new Promise(r => setTimeout(r, 5)); return { ...o, feeUsd: 0 }; },
+    async getPrice() { return null; },
+  };
+  const engine = new TradingEngine({ portfolio, risk, exchange });
+  const [a, b] = await Promise.all([
+    engine.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 60_000 }), // $60
+    engine.openPosition({ symbol: 'ETH', qty: 0.02, priceUsd: 3_000 }),   // $60 — only one can fit
+  ]);
+  assert.equal(a.status, 'filled');
+  assert.equal(b.status, 'blocked');
+  assert.match(b.reason, /insufficient cash/i);
+  assert.equal(portfolio.cashUsd, 40);
+  // A rejection in the queue does not wedge later orders.
+  const engine2 = new TradingEngine({ portfolio: new Portfolio({ startingCashUsd: 1000 }), risk, exchange: { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, feeUsd: NaN }; }, async getPrice() { return null; } } });
+  await assert.rejects(() => engine2.openPosition({ symbol: 'BTC', qty: 0.001, priceUsd: 60_000 }));
+  const after = await engine2.openPosition({ symbol: 'BTC', qty: 1, priceUsd: 60_000 });
+  assert.equal(after.status, 'blocked', 'the queue still runs after a rejection');
+});
+
+test('TradingEngine: closePosition refuses an oversell BEFORE the venue is asked, and a zero/absent mark blocks with kind price', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const portfolio = new Portfolio({ startingCashUsd: 1000 });
+  portfolio.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 70_000, feeUsd: 0 });
+  let priced = 0, quoted = 0, placed = 0;
+  const exchange = {
+    estimateFee() { quoted++; return 0; },
+    async placeOrder(o) { placed++; return { ...o, feeUsd: 0 }; },
+    async getPrice() { priced++; return 72_000; },
+  };
+  const engine = new TradingEngine({ portfolio, risk: new RiskEngine({ maxPositionUsd: 1e6, maxTotalExposureUsd: 1e6 }), exchange });
+  for (const qty of [0.003, 0, -1, NaN]) {
+    const o = await engine.closePosition({ symbol: 'BTC', qty });
+    assert.equal(o.status, 'blocked', `qty ${qty}`); assert.equal(o.kind, 'risk');
+  }
+  assert.equal(priced + quoted + placed, 0, 'nothing reached the exchange');
+  assert.equal(portfolio.getPosition('BTC')?.qty, 0.002);
+
+  for (const mark of [null, 0, -5, NaN]) {
+    const e2 = new TradingEngine({ portfolio, risk: new RiskEngine({ maxPositionUsd: 1e6, maxTotalExposureUsd: 1e6 }), exchange: { ...exchange, async getPrice() { return mark; } } });
+    const o = await e2.closePosition({ symbol: 'BTC' });
+    assert.equal(o.status, 'blocked'); assert.equal(o.kind, 'price');
+    assert.match(o.reason, /no usable price/i);
+  }
+  assert.equal(placed, 0);
+});
+
+test('TradingEngine: closePosition quotes the sell fee, blocks a dust close the fee would eat, and validates the sell fill', async () => {
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const risk = new RiskEngine({ maxPositionUsd: 1e6, maxTotalExposureUsd: 1e6 });
+  const seed = () => { const pf = new Portfolio({ startingCashUsd: 1000 }); pf.applyFill({ symbol: 'BTC', side: 'buy', qty: 0.002, priceUsd: 70_000, feeUsd: 0 }); return pf; };
+
+  // Dust: $1 minimum fee on a $0.72 sale.
+  const dustPf = seed();
+  const dust = await new TradingEngine({ portfolio: dustPf, risk, exchange: { estimateFee() { return 1; }, async placeOrder(o) { return { ...o, feeUsd: 1 }; }, async getPrice() { return 72_000; } } })
+    .closePosition({ symbol: 'BTC', qty: 0.00001 });
+  assert.equal(dust.status, 'blocked'); assert.equal(dust.kind, 'risk'); assert.match(dust.reason, /consume the whole/i);
+  assert.equal(dustPf.getPosition('BTC')?.qty, 0.002);
+
+  // Unbookable sell fills: wrong symbol, wrong side, NaN fee, more qty than held.
+  for (const override of [{ symbol: 'ETH' }, { side: 'buy' }, { feeUsd: NaN }, { qty: 0.003 }]) {
+    const pf = seed();
+    const before = JSON.stringify(pf.snapshot());
+    const engine = new TradingEngine({ portfolio: pf, risk, exchange: { estimateFee() { return 0; }, async placeOrder(o) { return { ...o, feeUsd: 0, ...override }; }, async getPrice() { return 72_000; } } });
+    await assert.rejects(() => engine.closePosition({ symbol: 'BTC' }), /unbookable fill.*reconcile clientOrderId/is);
+    assert.equal(JSON.stringify(pf.snapshot()), before, `state untouched for ${JSON.stringify(override)}`);
+  }
+
+  // Overcharged sell fee: booked, flagged.
+  const pf = seed();
+  const engine = new TradingEngine({ portfolio: pf, risk, exchange: { estimateFee() { return 0.15; }, async placeOrder(o) { return { ...o, feeUsd: 0.50 }; }, async getPrice() { return 72_000; } } });
+  const o = await engine.closePosition({ symbol: 'BTC' });
+  assert.equal(o.status, 'filled');
+  assert.equal(pf.getPosition('BTC'), undefined);
+  assert.ok(Math.abs(pf.cashUsd - (1000 - 140 + 144 - 0.5)) < 1e-9);
+  assert.equal(o.warnings.length, 1);
+  assert.match(o.warnings[0], /charged \$0\.5000.*above the approved estimate of \$0\.1500/);
+});
+
+test('LiveExchange: getPrice returns null for a zero, negative, or non-finite mark (CoinGecko reports 0 for delisted coins)', async () => {
+  const { LiveExchange } = await import('../dist/trading/live-exchange.js');
+  for (const price of [0, -1, NaN, Infinity, '0']) {
+    const ex = new LiveExchange({ pricing: { async getPrice() { return { price, change24h: 0, volume24h: 0, marketCap: 0 }; } }, feeBps: 10 });
+    assert.equal(await ex.getPrice('BTC'), null, `price ${price}`);
+  }
+  const ok = new LiveExchange({ pricing: { async getPrice() { return { price: 70_000, change24h: 0, volume24h: 0, marketCap: 0 }; } }, feeBps: 10 });
+  assert.equal(await ok.getPrice('btc'), 70_000);
+});
+
+test('createTradingCapabilities: block advice follows the block kind, and post-execution warnings reach the tool output and the journal', async () => {
+  const { createTradingCapabilities } = await import('../dist/tools/trading-execute.js');
+  const { TradingEngine } = await import('../dist/trading/engine.js');
+  const { Portfolio } = await import('../dist/trading/portfolio.js');
+  const { RiskEngine } = await import('../dist/trading/risk.js');
+  const { TradeLog } = await import('../dist/trading/trade-log.js');
+  const { blockAdvice } = await import('../dist/tools/trading-views.js');
+  assert.match(blockAdvice('risk'), /smaller qty/);
+  assert.doesNotMatch(blockAdvice('fee-quote'), /smaller qty/);
+  assert.match(blockAdvice('fee-quote'), /not a sizing problem/);
+  assert.match(blockAdvice('venue'), /nothing was filled or charged/);
+  assert.match(blockAdvice('price'), /no usable mark price/i);
+
+  const tmpLog = join(tmpdir(), `franklin-trades-${Date.now()}.jsonl`);
+  try {
+    const riskConfig = { maxPositionUsd: 500, maxTotalExposureUsd: 800 };
+    const portfolio = new Portfolio({ startingCashUsd: 1000 });
+    const exchange = {
+      estimateFee() { return 0.05; },
+      async placeOrder(o) { return { ...o, feeUsd: 0.90 }; }, // venue overcharges
+      async getPrice() { return 70_000; },
+    };
+    const engine = new TradingEngine({ portfolio, risk: new RiskEngine(riskConfig), exchange });
+    const tradeLog = new TradeLog(tmpLog);
+    const caps = createTradingCapabilities({ engine, riskConfig, tradeLog });
+    const open = caps.find(c => c.spec.name === 'TradingOpenPosition');
+    const res = await open.execute({ symbol: 'BTC', qty: 0.001, priceUsd: 70_000 }, {});
+    assert.ok(!res.isError, res.output);
+    assert.match(res.output, /Order filled/);
+    assert.match(res.output, /Post-execution warnings/);
+    assert.match(res.output, /above the approved estimate/);
+    const entries = tradeLog.all();
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].feeUsd, 0.9);
+    assert.ok(Array.isArray(entries[0].warnings) && entries[0].warnings.length === 1, 'journal carries the warning');
+
+    // Fee-quote outage on the next order: advice must not say "smaller qty".
+    exchange.estimateFee = () => { throw new Error('quote service down'); };
+    const blockedRes = await open.execute({ symbol: 'ETH', qty: 0.01, priceUsd: 3_000 }, {});
+    assert.match(blockedRes.output, /Order blocked/);
+    assert.match(blockedRes.output, /quote service down/);
+    assert.match(blockedRes.output, /not a sizing problem/);
+    assert.doesNotMatch(blockedRes.output, /smaller qty/);
+  } finally {
+    rmSync(tmpLog, { force: true });
+  }
 });
 
 test('portfolio store: save + load roundtrips cash, positions, realized P&L', async () => {
