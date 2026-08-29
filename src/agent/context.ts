@@ -10,7 +10,7 @@ import { BLOCKRUN_DIR } from '../config.js';
 import { getWalletAddress as getBaseWalletAddress } from '@blockrun/llm';
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { loadLearnings, decayLearnings, saveLearnings, formatForPrompt, loadSkills, matchSkills, formatSkillsForPrompt } from '../learnings/store.js';
+import { loadLearnings, decayLearnings, saveLearnings, formatForPrompt } from '../learnings/store.js';
 
 // ─── System Instructions Assembly ──────────────────────────────────────────
 // Composable prompt sections — each independently maintainable and conditionally includable.
@@ -229,7 +229,7 @@ You run on the BlockRun AI Gateway. When the user asks you to "test the BlockRun
 - \`GET /.well-known/x402\` — x402 resource list with prices
 
 **LLM (POST, x402-paid)**
-- \`POST /v1/chat/completions\` — OpenAI-compatible. Body: \`{ model, messages, stream?, tools?, max_tokens?, temperature? }\`. \`model\` MUST come from \`GET /v1/models\` (real frontier examples on the gateway as of 2026-05: \`anthropic/claude-sonnet-4.6\`, \`anthropic/claude-opus-4.8\`, \`deepseek/deepseek-v4-pro\`, \`zai/glm-5.1\`, \`nvidia/qwen3-coder-480b\`, \`openai/gpt-5-nano\`). Do NOT invent versions like \`openai/gpt-5.1\` or \`xai/grok-5\` — those don't exist; the gateway 400s with the valid list in the error body, so when in doubt fetch \`GET /v1/models\` first.
+- \`POST /v1/chat/completions\` — OpenAI-compatible. Body: \`{ model, messages, stream?, tools?, max_tokens?, temperature? }\`. \`model\` MUST come from \`GET /v1/models\` (real frontier examples on the gateway, verified live 2026-08-29: \`anthropic/claude-sonnet-5\`, \`anthropic/claude-opus-5\`, \`openai/gpt-5.6-sol\`, \`deepseek/deepseek-v4-pro\`, \`zai/glm-5.3\`, \`zai/glm-5.3-flash\`, \`xai/grok-4.5\`, \`qwen/qwen3.7-flash\`, \`nvidia/nemotron-nano-9b-v2\` (free)). Do NOT invent versions like \`openai/gpt-5.1\` or \`xai/grok-5\` — those don't exist; the gateway 400s with the valid list in the error body, so when in doubt fetch \`GET /v1/models\` first.
 - \`POST /v1/messages\` — Anthropic-compatible. Body: \`{ model, messages, max_tokens, system?, tools? }\`.
 
 **Media (POST, x402-paid; GET to poll async jobs)**
@@ -261,23 +261,20 @@ You run on the BlockRun AI Gateway. When the user asks you to "test the BlockRun
 - \`POST /v1/solana/rpc\` — JSON-RPC passthrough to public mainnet-beta (getAccountInfo, getTokenSupply, sendTransaction, etc.). \$0.0005 per call (per element of a batch). Use this instead of running your own RPC infra.
 
 **Solana DEX swap (Jupiter Ultra)**
-- Use the **\`JupiterQuote\` and \`JupiterSwap\` built-in tools** — they call Jupiter's Ultra API directly from this process. The user is the first-party caller of Jupiter; we are not a gateway proxy here. A 20 bps platform fee is collected on-chain as part of the swap (Jupiter Referral Program — official integrator mechanism, not a hidden cost).
+- Use **\`JupiterQuote\`** for read-only routes and prices. **\`JupiterSwap\`** is temporarily disabled until Franklin can locally validate every instruction, resolved account, and asset movement before signing.
 - Do NOT try to call \`/v1/jupiter/...\` on the BlockRun gateway — there is no such endpoint (Jupiter ToU forbids the gateway-proxy model).
 
-**Base DEX swap (0x V2 via BlockRun gateway)** — three modes, pick by user's wallet state:
+**Base DEX swap (0x V2 via BlockRun gateway)**
 
 - **\`Base0xQuote\`** (read-only): inspect price + impact + route. Free.
-- **\`Base0xSwap\`** (Permit2): user signs Permit2 typed-data + submits the tx themselves to Base RPC. **User needs ETH for gas.** Routes through BlockRun gateway \`/v1/zerox/{price,quote}\` — no 0x signup needed.
-- **\`Base0xGaslessSwap\`** (Gasless V2): user signs ONLY EIP-712 typed-data (offline, no on-chain action). 0x's relayer broadcasts the trade and pays gas. **User does NOT need any ETH.** Only works for Permit-supporting input tokens (USDC, DAI). USDT etc. do not support Permit on Base — the tool errors with that instruction. Routes through \`/v1/zerox/gasless/*\`.
+- **\`Base0xSwap\`** is temporarily disabled until Franklin can locally validate every transaction field and asset movement.
+- **\`Base0xGaslessSwap\`** is temporarily disabled until Franklin can locally validate every EIP-712 domain, approval, token, amount, recipient, nonce, and deadline.
 
-**Pick the right tool:**
-- User holds ETH on Base → use \`Base0xSwap\` (more flexibility, supports any input token).
-- User holds USDC/DAI but no ETH → use \`Base0xGaslessSwap\` (zero gas needed).
-- User asks for a quote without committing → use \`Base0xQuote\`.
+Use \`Base0xQuote\` to inspect the route and explain that live execution is temporarily unavailable for safety.
 
 Symbol shortcuts pre-mapped on all three: ETH (native, Base0xSwap only), WETH, USDC, USDT, CBBTC, CBETH, AERO, DAI. Raw \`0x...\` addresses pass through.
 
-On-chain affiliate (20 bps in sell-token, force-set server-side) flows to BlockRun treasury at settlement on all three paths. BlockRun never custodies user keys; signing is always local.
+When live execution is restored, its on-chain affiliate fee and local-signing behavior must remain clearly disclosed.
 
 **Sandbox (POST, x402-paid)**
 - \`/v1/modal/{...path}\` — Modal GPU sandbox passthrough (create/exec/etc.).
@@ -400,10 +397,10 @@ Your training data is frozen in the past. Live-world questions MUST be answered 
 
 If you find yourself about to emit one of these, stop and call the tool instead. If you don't know which ticker the user means, call ExaSearch or AskUser — never deflect.
 
-**Prediction markets (PredictionMarket).** When the user asks about real-world odds — elections, "will X happen by year-end", "Polymarket on Y", "Kalshi market for Z", "what are the odds of recession" — use **PredictionMarket** instead of guessing. Ten actions, route by intent:
+**Prediction markets (PredictionMarket).** When the user asks about real-world odds — elections, "will X happen by year-end", "Polymarket on Y", "Kalshi market for Z", "what are the odds of recession" — use **PredictionMarket** instead of guessing. Nine actions, route by intent:
 - "is there a market on X anywhere?" / unknown which platform → \`searchAll\` (\$0.005) — single call across Polymarket+Kalshi+Limitless+Opinion+Predict.Fun.
 - "what are the odds on Polymarket / Kalshi specifically" → \`searchPolymarket\` (\$0.001) and \`searchKalshi\` (\$0.001) **in parallel**; comparing implied probability across the two venues is the high-value answer.
-- "where do Polymarket and Kalshi disagree / arbitrage" → \`crossPlatform\` (\$0.005) returns pre-matched pairs.
+- "where do Polymarket and Kalshi disagree / arbitrage" → \`searchAll\` (\$0.005): its canonical containers span every venue, so one call surfaces the same market's odds side by side. (The old \`crossPlatform\` matched-pairs feed was discontinued upstream 2026-07-20.)
 - "who's profitable / top traders / who should I follow on Polymarket" → \`leaderboard\` (\$0.001) — global top wallets by P&L.
 - "analyze this wallet / can I copy this trader / show me their P&L AND positions" → run \`walletProfile\` + \`walletPnl\` + \`walletPositions\` IN PARALLEL with the same address. Three \$0.005 calls = full picture for \$0.015. Do NOT \`Bash\`-curl \`data-api.polymarket.com\` directly — those are paid Predexon endpoints and going around them defeats the wallet-attached architecture. If just the profile is needed: \`walletProfile\` alone (single address → /wallet/{addr}, comma-list → batch).
 - "what are smart traders betting on right now / smart money flow across markets" → \`smartActivity\` (\$0.005) — markets where high-P&L wallets are positioning.
@@ -500,16 +497,12 @@ export function assembleInstructions(workingDir: string, model?: string): string
     }
   } catch { /* learnings are optional — never block startup */ }
 
-  // Inject relevant skills (procedural memory from past complex tasks)
-  try {
-    const allSkills = loadSkills();
-    if (allSkills.length > 0) {
-      // Skills are matched lazily on first user message — for now inject top skills by use count
-      const topSkills = allSkills.sort((a, b) => b.uses - a.uses).slice(0, 5);
-      const skillsSection = formatSkillsForPrompt(topSkills);
-      if (skillsSection) parts.push(skillsSection);
-    }
-  } catch { /* skills are optional */ }
+  // Procedural skills (bundled + learned + user + project) used to be
+  // injected here at session boot. They now flow through the unified
+  // src/skills/ Registry and are matched per-turn against the user's
+  // message in src/skills/triggers.ts, so we no longer pre-inject all
+  // top-by-use skills into every system prompt — the per-turn hint is both
+  // more relevant and cheaper.
 
   // Model-specific execution guidance
   if (model) {
@@ -527,8 +520,14 @@ export function assembleInstructions(workingDir: string, model?: string): string
 export function getModelGuidance(model: string): string {
   const m = model.toLowerCase();
 
-  // Weak/cheap models: strict discipline to prevent looping and hallucination
-  if (m.includes('glm') || m.includes('gpt-oss') || m.includes('nemotron') ||
+  // Weak/cheap models: strict discipline to prevent looping and hallucination.
+  // The bare `glm` match dates from the GLM-4.x era. The paid Z.AI GLM-5 line
+  // is a different animal — 1M context, always-on reasoning, priced above
+  // Gemini 3.1 Pro on input — and `glm` now resolves to 5.3, so matching it
+  // here was telling a flagship to make ONE tool call and stay under 300
+  // words. GLM-5.x moves to the balanced branch; glm-4.7 and friends stay.
+  if ((m.includes('glm') && !m.includes('glm-5')) ||
+      m.includes('gpt-oss') || m.includes('nemotron') ||
       m.includes('minimax') || m.includes('devstral') || m.includes('llama-4')) {
     return `# Execution Discipline (strict — this model requires guardrails)
 - Make ONE tool call per task. Do NOT retry the same tool with query variations.
@@ -538,9 +537,15 @@ export function getModelGuidance(model: string): string {
 - Before responding: does every URL and fact come from a tool result? If not, remove it.`;
   }
 
-  // Medium models: balanced guidance
+  // Medium models: balanced guidance. The bare `qwen` match dates from when
+  // every qwen id on the gateway was a free NVIDIA SKU. The paid Qwen line is
+  // now Max + Plus + Flash — all 1M-context with reasoning — so only the Max
+  // flagship graduates to the strong branch; Plus and Flash stay here, and the
+  // legacy free `nvidia/qwen*` ids keep matching as before.
   if (m.includes('kimi') || m.includes('grok') || m.includes('flash') ||
-      m.includes('haiku') || m.includes('deepseek') || m.includes('qwen')) {
+      m.includes('haiku') || m.includes('deepseek') ||
+      m.includes('hy3') || m.includes('mimo') || m.includes('glm-5') ||
+      (m.includes('qwen') && !m.includes('qwen3.7-max'))) {
     return `# Execution Guidance
 - Use tools to verify facts before stating them. Do not answer from memory when a tool can confirm.
 - Batch independent tool calls in one response (parallel execution).
@@ -551,7 +556,8 @@ export function getModelGuidance(model: string): string {
   // Strong models: quality standards + thinking guidance
   if (m.includes('claude') || m.includes('gpt-5') || m.includes('opus') ||
       m.includes('sonnet') || m.includes('gemini-2.5-pro') || m.includes('gemini-3') ||
-      m.includes('o3') || m.includes('o1') || m.includes('codex')) {
+      m.includes('o3') || m.includes('o1') || m.includes('codex') ||
+      m.includes('chat-latest') || m.includes('qwen3.7-max')) {
     return `# Quality Standards (strong model)
 - Keep calling tools until the task is complete AND the result is verified. Don't stop at "this should work" — prove it works.
 - Before finalizing: check correctness, grounding in tool output, and formatting.

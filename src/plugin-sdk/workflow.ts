@@ -15,15 +15,15 @@ export type ModelTier = 'free' | 'cheap' | 'premium' | 'none';
 
 /** Maps tier names to actual model identifiers */
 export interface ModelTierConfig {
-  free: string;      // e.g. "nvidia/qwen3-coder-480b"
+  free: string;      // e.g. "nvidia/nemotron-nano-9b-v2"
   cheap: string;     // e.g. "zai/glm-5.1"
-  premium: string;   // e.g. "anthropic/claude-sonnet-4.6"
+  premium: string;   // e.g. "anthropic/claude-sonnet-5"
 }
 
 export const DEFAULT_MODEL_TIERS: ModelTierConfig = {
-  free: 'nvidia/qwen3-coder-480b',
-  cheap: 'nvidia/qwen3-coder-480b', // Free by default; opt-in to paid flat-rate via 'zai/glm-5.1'.
-  premium: 'anthropic/claude-sonnet-4.6',
+  free: 'nvidia/nemotron-nano-9b-v2',
+  cheap: 'nvidia/nemotron-nano-9b-v2', // Free by default; opt-in to paid flat-rate via 'zai/glm-5.1'.
+  premium: 'anthropic/claude-sonnet-5',
 };
 
 // ─── Workflow Steps ───────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ export interface WorkflowStepContext {
   data: Record<string, unknown>;
   /** Call an LLM at the specified tier */
   callModel: (tier: ModelTier, prompt: string, system?: string) => Promise<string>;
-  /** Generate an image (DALL-E / Flux) */
+  /** Generate an image (gpt-image / nano-banana) */
   generateImage?: (prompt: string) => Promise<string>;
   /** Search the web (Exa neural / WebSearch fallback) */
   search: (query: string, options?: { sources?: string[]; maxResults?: number }) => Promise<SearchResult[]>;

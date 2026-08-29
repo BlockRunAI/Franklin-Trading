@@ -124,12 +124,45 @@ function symbolFor(mint: string): string {
   return mint.slice(0, 4) + '…';
 }
 
-function toAtomicUnits(amount: number, decimals: number): string {
-  // BigInt math — JavaScript number can lose precision for large lamport counts.
-  const scale = BigInt(10) ** BigInt(decimals);
-  const whole = BigInt(Math.floor(amount));
-  const fractional = BigInt(Math.round((amount - Math.floor(amount)) * Number(scale)));
-  return (whole * scale + fractional).toString();
+export function toAtomicUnits(amount: number, decimals: number): string {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('amount must be a positive finite number');
+  }
+
+  if (!Number.isSafeInteger(decimals) || decimals < 0) {
+    throw new Error('decimals must be a nonnegative safe integer');
+  }
+
+  // Parse the decimal string directly — no `float * scale`, which loses
+  // precision on high-decimal tokens (the original bug #89 fixed). Excess
+  // precision beyond the token's `decimals` is FLOORED to the atomic unit
+  // (slice keeps the leading `decimals` digits), so an agent-computed amount —
+  // ⅓ of a balance, or float noise like 0.1 + 0.2 = 0.30000000000000004 — still
+  // swaps its representable part instead of being rejected. The original
+  // Math.round approach instead rounded a sub-unit amount UP to one atomic unit.
+  // Plain-decimal string (never exponential form, so BigInt(wholePart) can't
+  // throw on large amounts like 1e21). toLocaleString keeps the exact value to
+  // 20 fraction digits — more than any token's decimals — and the slice() below
+  // FLOORS by truncation, so sub-precision dust is never rounded UP to one unit
+  // (unlike the old toFixed path, which rounded 9.999e-10 up to 1).
+  const amountText = amount.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 });
+  const [wholePart, fractionalPart = ''] = amountText.split('.');
+  const normalizedFraction = fractionalPart.padEnd(decimals, '0').slice(0, decimals);
+
+  const whole = BigInt(wholePart);
+  const fraction = normalizedFraction === '' ? 0n : BigInt(normalizedFraction);
+  const scale = 10n ** BigInt(decimals);
+  const atomic = whole * scale + fraction;
+
+  // Reject only TRUE dust: an amount so small it floors to zero atomic units,
+  // which Jupiter can't swap. (The old code rounded this UP to 1 unit instead.)
+  if (atomic === 0n) {
+    throw new Error(
+      `amount ${amount} is below the minimum atomic unit for a ${decimals}-decimal token — too small to swap`,
+    );
+  }
+
+  return atomic.toString();
 }
 
 function fromAtomicUnits(atomic: string | number, decimals: number): number {
@@ -263,7 +296,15 @@ async function executeJupiterQuote(input: QuoteInput): Promise<{ output: string;
   const inputMint = resolveMint(input.input_mint);
   const outputMint = resolveMint(input.output_mint);
   const inDec = decimalsFor(inputMint);
-  const amountAtomic = toAtomicUnits(input.amount, inDec);
+  let amountAtomic: string;
+  try {
+    amountAtomic = toAtomicUnits(input.amount, inDec);
+  } catch (err) {
+    return {
+      output: `Invalid Jupiter amount: ${err instanceof Error ? err.message : String(err)}`,
+      isError: true,
+    };
+  }
 
   try {
     const order = await ultraOrder({ inputMint, outputMint, amount: amountAtomic });
@@ -279,7 +320,7 @@ async function executeJupiterQuote(input: QuoteInput): Promise<{ output: string;
   }
 }
 
-async function executeJupiterSwap(
+async function executeJupiterSwapUnsafeReference(
   input: SwapInput,
   ctx: ExecutionScope
 ): Promise<{ output: string; isError?: boolean }> {
@@ -298,7 +339,15 @@ async function executeJupiterSwap(
   const inputMint = resolveMint(input.input_mint);
   const outputMint = resolveMint(input.output_mint);
   const inDec = decimalsFor(inputMint);
-  const amountAtomic = toAtomicUnits(input.amount, inDec);
+  let amountAtomic: string;
+  try {
+    amountAtomic = toAtomicUnits(input.amount, inDec);
+  } catch (err) {
+    return {
+      output: `Invalid Jupiter amount: ${err instanceof Error ? err.message : String(err)}`,
+      isError: true,
+    };
+  }
 
   // Load wallet — `getOrCreateSolanaWallet` auto-creates on first run, so this
   // path firing means the file is corrupt or the .blockrun dir is unreadable.
@@ -435,6 +484,25 @@ async function executeJupiterSwap(
   }
 }
 
+async function executeJupiterSwap(
+  input: SwapInput,
+  ctx: ExecutionScope,
+): Promise<{ output: string; isError?: boolean }> {
+  // Fail closed until Franklin can independently validate the complete
+  // versioned transaction (including address-table-resolved accounts and all
+  // token/lamport effects) against the user's approved swap. Signing opaque
+  // transaction bytes returned by an upstream service is not an acceptable
+  // wallet boundary. JupiterQuote remains available.
+  void input;
+  void ctx;
+  void executeJupiterSwapUnsafeReference;
+  return {
+    output:
+      'Live Jupiter swaps are temporarily disabled for safety. Franklin will not sign an upstream transaction until it can locally verify every instruction and asset movement. Use JupiterQuote to inspect current routes and prices.',
+    isError: true,
+  };
+}
+
 // ─── Capability handlers ──────────────────────────────────────────────────
 
 const COMMON_INPUT_PROPERTIES = {
@@ -475,7 +543,7 @@ export const jupiterSwapCapability: CapabilityHandler = {
   spec: {
     name: 'JupiterSwap',
     description:
-      "Execute a Solana DEX swap via Jupiter Ultra. Quotes the order, asks the user to confirm via AskUser, signs locally with the Franklin Solana wallet, and submits. A 20 bps platform fee is collected on-chain by Jupiter as part of the swap (BlockRun referral — official integrator program). Returns the Solscan transaction link.",
+      "Live Solana swap execution is temporarily unavailable while Franklin adds complete local transaction validation. Use JupiterQuote for a read-only route and price; Franklin will not sign opaque upstream transaction bytes.",
     input_schema: {
       type: 'object',
       required: ['input_mint', 'output_mint', 'amount'],

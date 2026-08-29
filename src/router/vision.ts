@@ -21,34 +21,76 @@
 
 const VISION_MODELS = new Set<string>([
   // Anthropic — native vision across the line
+  'anthropic/claude-fable-5',
+  'anthropic/claude-opus-5',
   'anthropic/claude-opus-4.8',
   'anthropic/claude-opus-4.7',
+  // Hidden from /v1/models since 2026-08 but still served (probed through
+  // the binary 2026-08-29) — a pinned `opus-4.6` image turn must not be
+  // rerouted to a sibling the user didn't ask for.
   'anthropic/claude-opus-4.6',
+  'anthropic/claude-opus-4.5',
+  'anthropic/claude-sonnet-5',
   'anthropic/claude-sonnet-4.6',
-  'anthropic/claude-haiku-4.5-20251001',
-  // OpenAI — multimodal flagships + o3 (Codex 5.3 is text-only, excluded)
+  'anthropic/claude-sonnet-4.5',
+  'anthropic/claude-haiku-4.5',
+  // OpenAI — multimodal flagships + o3 (Codex 5.3 is text-only, excluded).
+  // GPT-5.6 family + 5.4-mini are vision; 5.4-nano is text-only.
+  'openai/gpt-5.6-sol',
+  'openai/gpt-5.6-terra',
+  'openai/gpt-5.6-luna',
+  // The pro reasoning tier is the same multimodal base with thinking on.
+  'openai/gpt-5.6-sol-pro',
+  'openai/gpt-5.6-terra-pro',
+  'openai/gpt-5.6-luna-pro',
   'openai/gpt-5.5',
+  'openai/gpt-5.5-pro',
+  // The rolling ChatGPT default — vision-tagged in the catalog.
+  'openai/chat-latest',
   'openai/gpt-5.4',
   'openai/gpt-5.4-pro',
+  'openai/gpt-5.4-mini',
   'openai/gpt-5.2',
   'openai/gpt-5.2-pro',
   'openai/gpt-5-mini',
+  'openai/gpt-5.3',
   'openai/gpt-4.1',
+  'openai/gpt-4o',
   'openai/o3',
-  // Google — vision baked into every Gemini SKU we surface
+  // Google — vision baked into every Gemini SKU we surface (flash-lite excepted)
   'google/gemini-3.1-pro',
+  'google/gemini-3.6-flash',
+  'google/gemini-3.5-flash',
+  'google/gemini-3-flash-preview',
   'google/gemini-2.5-pro',
   'google/gemini-2.5-flash',
-  // xAI — grok-4.3 (2026-06-04 flagship) and Grok 4 base support vision;
-  // grok-4-1-fast-reasoning is text-only. grok-build-0.1 accepts image input.
+  // xAI — grok-4-1-fast-reasoning stays out (text-only). Grok 4.5 and 4.3 are
+  // both vision-capable in the catalog and were missing here until 2026-08-20:
+  // `grok` resolves to 4.5, so every image turn on the xAI flagship was being
+  // rerouted to a "vision sibling" the user never asked for. grok-4-0709 and
+  // grok-3 are hidden from /v1/models but still served (probed 2026-08-29).
+  'xai/grok-4.5',
   'xai/grok-4.3',
-  'xai/grok-build-0.1',
   'xai/grok-4-0709',
   'xai/grok-3',
-  // Moonshot — K2.6 added vision + reasoning when it replaced K2.5
+  // Moonshot — K3 is the flagship; the K2.x line is hidden from /v1/models
+  // but still served (probed 2026-08-29) and is catalogued as multimodal.
+  'moonshot/kimi-k3',
+  'moonshot/kimi-k2.7',
   'moonshot/kimi-k2.6',
-  // NVIDIA inference — Llama 4 Maverick is multimodal; deepseek/qwen-coder are not
-  'nvidia/llama-4-maverick',
+  'moonshot/kimi-k2.5',
+  // Z.AI — GLM-5.3 Flash is the one GLM SKU the catalog tags as vision
+  // (2026-08-29 sync); GLM-5.3 / 5.2 / 5.1 are text + reasoning only.
+  'zai/glm-5.3-flash',
+  // NVIDIA inference — Nemotron Nano VL is multimodal; deepseek/qwen-coder are
+  // not. Llama 4 Maverick dropped 2026-07-14: it left the gateway catalog, and
+  // listing it here contradicted routeRequest()'s own "maverick is text-only"
+  // note — the free profile would route a vision turn to a text-only model.
+  'nvidia/nemotron-nano-12b-v2-vl',
+  // Nemotron 3 Nano Omni accepts text, images, video and audio, and now serves
+  // itself (2026-08-19 probe) — it is the strongest free vision option in the
+  // catalog on ChartQA / DocVQA / MMMU.
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
 ]);
 
 /** Does this concrete gateway model accept image input? */

@@ -43,6 +43,7 @@ import { getOrCreateWallet } from '@blockrun/llm';
 
 import { loadConfig } from '../commands/config.js';
 import { loadChain, API_URLS, VERSION } from '../config.js';
+import { appendSwap } from '../stats/swap-log.js';
 import type { CapabilityHandler, ExecutionScope } from '../agent/types.js';
 
 // ─── BlockRun affiliate identity on Base ─────────────────────────────────
@@ -373,7 +374,7 @@ async function executeBase0xQuote(
 
 // ─── Swap (full execute) ─────────────────────────────────────────────────
 
-async function executeBase0xSwap(
+async function executeBase0xSwapUnsafeReference(
   input: SwapInput,
   ctx: ExecutionScope,
 ): Promise<{ output: string; isError?: boolean }> {
@@ -549,14 +550,65 @@ async function executeBase0xSwap(
 
   liveSwapCount += 1;
   const explorer = `https://basescan.org/tx/${txHash}`;
+  // Confirm on-chain before recording: a submitted tx can still revert (e.g.
+  // slippage floor exceeded), and the swap log feeds the desktop wallet
+  // history — same confirmed-only gating as the gasless tool. Base blocks land
+  // in ~2s, so the wait is cheap.
+  let confirmed = false;
+  try {
+    const receipt = await client.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 });
+    if (receipt.status !== 'success') {
+      return {
+        output:
+          `Swap reverted on-chain (likely the slippage floor was exceeded — no tokens moved, only gas was spent).\n` +
+          `Tx hash: ${txHash}\n${explorer}`,
+        isError: true,
+      };
+    }
+    confirmed = true;
+  } catch { /* receipt wait timed out / RPC hiccup — report submitted, don't record */ }
+  if (confirmed) {
+    // Record the swap so the desktop wallet can show a history (best-effort).
+    try {
+      appendSwap({
+        ts: Date.now(),
+        chain: 'base',
+        dex: '0x',
+        sellSym: symbolFor(quote.sellToken),
+        sellAmount: Number(formatUnits(BigInt(quote.sellAmount), decimalsFor(quote.sellToken))),
+        buySym: symbolFor(quote.buyToken),
+        buyAmount: Number(formatUnits(BigInt(quote.buyAmount), decimalsFor(quote.buyToken))),
+        txHash,
+        explorer,
+      });
+    } catch { /* best-effort */ }
+  }
   return {
     output: [
-      '✓ Swap executed on Base.',
+      confirmed ? '✓ Swap executed on Base.' : '✓ Swap submitted on Base (confirmation pending — check the explorer).',
       formatQuoteText(quote),
       `Tx hash: ${txHash}`,
       explorer,
       `(Session live-swap count: ${liveSwapCount}/${liveSwapCap === Infinity ? '∞' : liveSwapCap})`,
     ].join('\n'),
+  };
+}
+
+async function executeBase0xSwap(
+  input: SwapInput,
+  ctx: ExecutionScope,
+): Promise<{ output: string; isError?: boolean }> {
+  // Fail closed until Franklin can independently bind the upstream Permit2
+  // typed data, allowance spender, transaction target, calldata, value, and
+  // token effects to the exact swap the user approved. A displayed quote is
+  // not sufficient proof that the bytes being signed execute that quote.
+  void input;
+  void ctx;
+  void executeBase0xSwapUnsafeReference;
+  return {
+    output:
+      'Live Base swaps through 0x are temporarily disabled for safety. Franklin will not approve a gateway-provided spender or sign an upstream transaction until every asset movement can be verified locally. Use Base0xQuote for a read-only route and price.',
+    isError: true,
   };
 }
 
@@ -600,7 +652,7 @@ export const base0xSwapCapability: CapabilityHandler = {
   spec: {
     name: 'Base0xSwap',
     description:
-      "Execute a Base DEX swap via 0x V2 (Permit2). Quotes through BlockRun gateway (x402-paid, server-side 0x key — no user setup needed), asks the user to confirm, signs locally with the Franklin Base wallet, and submits via Base RPC. A 20 bps affiliate fee in the sell-token is collected on-chain by 0x as part of the swap (BlockRun affiliate program — official 0x integrator mechanism). Returns the BaseScan transaction link.",
+      "Live Base swap execution through 0x is temporarily unavailable while Franklin adds complete local transaction and Permit2 validation. Use Base0xQuote for a read-only route and price; Franklin will not approve or sign opaque gateway-provided transaction data.",
     input_schema: {
       type: 'object',
       required: ['sell_token', 'buy_token', 'sell_amount'],

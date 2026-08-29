@@ -29,8 +29,8 @@ import { setSessionPersistenceDisabled } from '../session/storage.js';
 import { estimateCost, OPUS_PRICING } from '../pricing.js';
 import { maybeMidSessionExtract } from '../learnings/extractor.js';
 import { extractMentions, buildEntityContext, loadEntities } from '../brain/store.js';
-import { routeRequest, routeRequestAsync, resolveTierToModel, parseRoutingProfile, getFallbackChain, pickFreeFallback, isVisionModel, messageNeedsVision, pickVisionSibling } from '../router/index.js';
-import type { Tier, RoutingProfile } from '../router/index.js';
+import { routeRequest, parseRoutingProfile, getFallbackChain, pickFreeFallback, isVisionModel, messageNeedsVision, pickVisionSibling, markModelUnavailable } from '../router/index.js';
+import type { Tier, RoutingProfile, RoutingResult } from '../router/index.js';
 import { recordOutcome } from '../router/local-elo.js';
 import { shouldPlan, getPlanningPrompt, getExecutorModel, isExecutorStuck, toolCallSignature } from './planner.js';
 import { shouldVerify, runVerification } from './verification.js';
@@ -876,6 +876,17 @@ export async function interactiveSession(
     // the same threshold would flap on every iteration once crossed.
     let bloatCompactedThisTurn = false;
     let maxTokensOverride: number | undefined;
+    // Auto picks once for the whole user turn. Internal tool/planning rounds
+    // reuse the decision unless a real provider/payment failure deliberately
+    // switches config.model to a fallback.
+    let pinnedRouting: RoutingResult | undefined;
+    // Re-routes taken this turn because the gateway rejected the routed model
+    // id outright. Bounded so a chain that is dead end-to-end surfaces the
+    // error instead of cycling; each re-route is a $0 request anyway (the
+    // gateway rejects the id before any payment settles).
+    let deadModelReroutes = 0;
+    const MAX_DEAD_MODEL_REROUTES = 3;
+    let routingCandidates: string[] = [];
     const turnIdleReference = lastSessionActivity;
     lastSessionActivity = Date.now();
 
@@ -1291,9 +1302,18 @@ export async function interactiveSession(
       let routingConfidence: number | undefined;
       let routingSavings: number | undefined;
       if (routingProfile) {
-        const routing = turnAnalysis
-          ? resolveTierToModel(turnAnalysis.tier, routingProfile, turnNeedsVision)
-          : await routeRequestAsync(lastUserInput || '', routingProfile, undefined, turnNeedsVision);
+        // Auto routes through the shared @blockrun/router-core engine — local,
+        // deterministic, no classifier round-trip. The decision is pinned for
+        // the whole user turn; internal tool/planning rounds reuse it unless a
+        // real provider/payment failure deliberately switches config.model.
+        const routing = pinnedRouting ?? routeRequest(lastUserInput || '', routingProfile, {
+          needsVision: turnNeedsVision,
+          maxOutputTokens: maxTokens,
+          hasTools: activeCapabilityMap.size > 0,
+          toolNames: [...activeCapabilityMap.keys()],
+        });
+        pinnedRouting ??= routing;
+        routingCandidates = routing.candidates ?? [routing.model];
         resolvedModel = routing.model;
         routingTier = routing.tier;
         routingConfidence = routing.confidence;
@@ -1527,6 +1547,27 @@ export async function interactiveSession(
         const errMsg = (err as Error).message || '';
         const classified = classifyAgentError(errMsg);
 
+        // ── Dead model id (400 "Unknown model" / 404 / 410) ──
+        // Retrying can't help and a fallback chain that still names the id
+        // would just hand it back. When Auto routing picked it, feed the
+        // router's dead-rung kill-switch and re-route this same turn: the
+        // shared Router removes the id from every chain before its next
+        // selection. A concrete user-pinned model is left alone — the user
+        // chose it, and the classified suggestion already says /model.
+        if (classified.modelUnavailable && parseRoutingProfile(config.model)) {
+          const dead = resolvedModel;
+          if (markModelUnavailable(dead) && deadModelReroutes < MAX_DEAD_MODEL_REROUTES) {
+            deadModelReroutes++;
+            pinnedRouting = undefined;
+            logger.warn(`[franklin] ${dead} rejected by the gateway as unavailable — re-routing (${deadModelReroutes}/${MAX_DEAD_MODEL_REROUTES})`);
+            onEvent({
+              kind: 'text_delta',
+              text: `\n*${dead} is no longer served by the gateway — re-routing*\n`,
+            });
+            continue;
+          }
+        }
+
         // ── Media size error recovery (strip images/PDFs + retry) ──
         if (isMediaSizeError(errMsg) && recoveryAttempts < MAX_RECOVERY_ATTEMPTS) {
           recoveryAttempts++;
@@ -1618,12 +1659,17 @@ export async function interactiveSession(
           // transients (rate limits, network blips) where retry is the right
           // call. Also skipped when the user picked a concrete model — they
           // explicitly chose this one, so we shouldn't silently swap.
-          if (classified.category === 'server' && parseRoutingProfile(config.model)) {
+          // Overloaded (529) joins the streak guard: a model that stays busy
+          // twice in a row is switched out the same way a 5xx'ing one is.
+          if ((classified.category === 'server' || classified.category === 'overloaded') && parseRoutingProfile(config.model)) {
             const streak = (serverErrorsByModel.get(resolvedModel) ?? 0) + 1;
             serverErrorsByModel.set(resolvedModel, streak);
             if (streak >= SERVER_ERROR_STREAK_BEFORE_SWITCH) {
-              const fallbackChain = getFallbackChain(routingTier ?? 'MEDIUM',
-                parseRoutingProfile(config.model) ?? 'auto');
+              // Prefer the shared Router's own recovery chain for this turn;
+              // fall back to the tier chain only when routing gave no candidates.
+              const fallbackChain = routingCandidates.length > 0
+                ? routingCandidates
+                : getFallbackChain(routingTier ?? 'MEDIUM', parseRoutingProfile(config.model) ?? 'auto');
               const nextModel = fallbackChain.find(m =>
                 m !== resolvedModel && (serverErrorsByModel.get(m) ?? 0) < SERVER_ERROR_STREAK_BEFORE_SWITCH
               );
@@ -1631,9 +1677,10 @@ export async function interactiveSession(
                 config.model = nextModel;
                 config.onModelChange?.(nextModel, 'system');
                 recoveryAttempts = 0;
+                const failKind = classified.category === 'overloaded' ? 'is overloaded' : "keeps 5xx'ing";
                 onEvent({
                   kind: 'text_delta',
-                  text: `\n*${resolvedModel} keeps failing with server errors (${streak} in a row) — switching to ${nextModel}*\n`,
+                  text: `\n*${resolvedModel} ${failKind} (${streak} in a row) — switching to ${nextModel}*\n`,
                 });
                 continue;
               }

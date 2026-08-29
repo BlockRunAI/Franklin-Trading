@@ -4,7 +4,11 @@
  */
 
 import chalk from 'chalk';
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { render, Static, Box, Text, useApp, useInput, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
@@ -13,13 +17,17 @@ import type { StreamEvent } from '../agent/types.js';
 import { renderMarkdown, renderMarkdownStreaming } from './markdown.js';
 import {
   resolveModel,
+  getPickerCategories,
+  getExpandedPickerCategories,
   PICKER_CATEGORIES,
   PICKER_MODELS_FLAT,
+  type ModelCategory,
 } from './model-picker.js';
 import { estimateCost } from '../pricing.js';
 import { formatTokens, shortModelName } from '../stats/format.js';
 import { mouse, forceDisableMouseTracking, type MouseEvent as TermMouseEvent } from './mouse.js';
 import { resolveAskUserAnswer } from './ask-user-answer.js';
+import { looksLikeImagePasteStub } from './paste-heuristics.js';
 
 // ─── Full-width input box ──────────────────────────────────────────────────
 
@@ -30,6 +38,16 @@ const DISABLE_BRACKETED_PASTE = '\x1b[?2004l';
 const USER_PROMPT_COLOR = '#FFD700';
 const PASTE_BLOCK_START = '\uE000PASTE:';
 const PASTE_BLOCK_END = ':PASTE\uE001';
+// Image attachments work the same way as text paste blocks: the input string
+// carries an encoded token, renderInputValue shows a placeholder, decodePromptValue
+// replaces with the absolute file path when the prompt is submitted. The downstream
+// flow already understands paths \u2014 messageNeedsVision routes to a vision model and
+// the Read tool inlines the bytes \u2014 so an image paste just needs the path injected.
+const IMG_BLOCK_START = '\uE000IMG:';
+const IMG_BLOCK_END = ':IMG\uE001';
+// Clipboard images bigger than this are rejected upfront so a 12MB retina
+// screenshot doesn't sit in /tmp and then fail at Read time. Matches read.ts's cap.
+const MAX_CLIPBOARD_IMG_BYTES = 3_750_000;
 // Only collapse pastes of >= this many lines into a [Pasted ~N lines] block.
 // Short pastes (one-liners, 2-4 line snippets) inline as plain text so the
 // model sees them verbatim and the user can read what they pasted in the
@@ -54,16 +72,37 @@ function normalizeInputNewlines(input: string): string {
 interface PasteBlock {
   start: number;
   end: number;
+  /** Decoded content. For text blocks this is the original text; for image
+   * blocks it is the absolute path to the saved clipboard image. */
   content: string;
+  kind: 'text' | 'image';
 }
 
 function encodePasteBlock(content: string): string {
   return `${PASTE_BLOCK_START}${Buffer.from(content, 'utf8').toString('base64')}${PASTE_BLOCK_END}`;
 }
 
-function decodePasteBlock(token: string): string {
-  if (!token.startsWith(PASTE_BLOCK_START) || !token.endsWith(PASTE_BLOCK_END)) return token;
-  const payload = token.slice(PASTE_BLOCK_START.length, -PASTE_BLOCK_END.length);
+function encodeImageBlock(absolutePath: string): string {
+  return `${IMG_BLOCK_START}${Buffer.from(absolutePath, 'utf8').toString('base64')}${IMG_BLOCK_END}`;
+}
+
+/**
+ * Probe the clipboard for an image and return the input-block to splice in at
+ * the cursor — an encoded `[IMG:…]` block on success, an inline
+ * `[Image rejected: …]` notice if the image was found but unusable, or null
+ * when there's no image. Shared by PromptTextInput's Ctrl+V path and VimInput
+ * (which renders instead of PromptTextInput in vim mode).
+ */
+async function readClipboardImageInjection(): Promise<string | null> {
+  const img = await tryReadClipboardImage();
+  if (img && 'path' in img) return encodeImageBlock(img.path);
+  if (img && 'error' in img) return `[Image rejected: ${img.error}] `;
+  return null;
+}
+
+function decodeBlockPayload(token: string, startMarker: string, endMarker: string): string {
+  if (!token.startsWith(startMarker) || !token.endsWith(endMarker)) return token;
+  const payload = token.slice(startMarker.length, -endMarker.length);
   try {
     return Buffer.from(payload, 'base64').toString('utf8');
   } catch {
@@ -75,13 +114,36 @@ function findPasteBlocks(value: string): PasteBlock[] {
   const blocks: PasteBlock[] = [];
   let searchFrom = 0;
 
+  // Scan for both text and image blocks in a single pass, taking whichever
+  // starts earlier so they can be interleaved in any order in the input.
   while (searchFrom < value.length) {
-    const start = value.indexOf(PASTE_BLOCK_START, searchFrom);
-    if (start < 0) break;
-    const endMarker = value.indexOf(PASTE_BLOCK_END, start + PASTE_BLOCK_START.length);
-    if (endMarker < 0) break;
-    const end = endMarker + PASTE_BLOCK_END.length;
-    blocks.push({ start, end, content: decodePasteBlock(value.slice(start, end)) });
+    const textStart = value.indexOf(PASTE_BLOCK_START, searchFrom);
+    const imgStart = value.indexOf(IMG_BLOCK_START, searchFrom);
+    let kind: 'text' | 'image';
+    let start: number;
+    let startMarker: string;
+    let endMarker: string;
+    if (textStart < 0 && imgStart < 0) break;
+    if (textStart < 0 || (imgStart >= 0 && imgStart < textStart)) {
+      kind = 'image';
+      start = imgStart;
+      startMarker = IMG_BLOCK_START;
+      endMarker = IMG_BLOCK_END;
+    } else {
+      kind = 'text';
+      start = textStart;
+      startMarker = PASTE_BLOCK_START;
+      endMarker = PASTE_BLOCK_END;
+    }
+    const endIdx = value.indexOf(endMarker, start + startMarker.length);
+    if (endIdx < 0) break;
+    const end = endIdx + endMarker.length;
+    blocks.push({
+      start,
+      end,
+      kind,
+      content: decodeBlockPayload(value.slice(start, end), startMarker, endMarker),
+    });
     searchFrom = end;
   }
 
@@ -93,15 +155,185 @@ function decodePromptValue(value: string): string {
   let cursor = 0;
 
   for (const block of findPasteBlocks(value)) {
-    decoded += value.slice(cursor, block.start) + block.content;
+    // Image blocks decode to a bare filesystem path. Pad it with spaces so the
+    // path stays a standalone token even when the user typed text flush against
+    // the placeholder — otherwise `foo[Image]bar` → `foo/tmp/x.pngbar`, which
+    // breaks both the vision-routing regex and the model's path parsing.
+    const piece = block.kind === 'image' ? ` ${block.content} ` : block.content;
+    decoded += value.slice(cursor, block.start) + piece;
     cursor = block.end;
   }
 
   return decoded + value.slice(cursor);
 }
 
-function pasteSummary(content: string): string {
-  const lines = content.length === 0 ? 0 : content.split('\n').length;
+function promptValueForDisplay(value: string): string {
+  let rendered = '';
+  let cursor = 0;
+
+  for (const block of findPasteBlocks(value)) {
+    rendered += value.slice(cursor, block.start) + pasteSummary(block);
+    cursor = block.end;
+  }
+
+  return rendered + value.slice(cursor);
+}
+
+/**
+ * Read the system clipboard, and if it currently holds an image, save it to
+ * a temp file and return the absolute path. Otherwise return null.
+ *
+ * Probed synchronously because it's only called on a paste event where the
+ * user is actively waiting — the 30-100 ms shell-out is imperceptible. Bound
+ * by a short timeout so a hung clipboard tool can never block the input loop.
+ *
+ * macOS: `pbpaste -Prefer image` writes the clipboard image to stdout (PNG
+ * if available, otherwise nothing/text). Empty stdout means no image.
+ * Linux: tries `wl-paste --type image/png` (Wayland) then `xclip -selection
+ * clipboard -t image/png -o` (X11). The first one that returns non-empty
+ * bytes wins.
+ *
+ * Files land in $TMPDIR/franklin-clip-<ts>.png. macOS scrubs /tmp on reboot
+ * and most Linux distros sweep entries older than 10 days via tmpfiles.d, so
+ * we deliberately do NOT add our own cleanup — the OS handles it.
+ */
+/**
+ * Down-scale an oversize clipboard image so it fits under MAX_CLIPBOARD_IMG_BYTES
+ * instead of being rejected. Reuses the same strategy as Read on a .png file
+ * (`src/tools/read.ts`): long edge → 1280 px, JPEG q85 (mozjpeg), preserving
+ * PNG when there's real transparency. Overwrites the original file in place.
+ *
+ * Best-effort: if sharp is missing or chokes, we return null and the caller
+ * surfaces the original-size rejection rather than silently shipping a 12 MB
+ * paste downstream.
+ */
+async function shrinkImageInPlace(filePath: string): Promise<{ from: number; to: number } | null> {
+  try {
+    const before = fs.statSync(filePath).size;
+    const raw = fs.readFileSync(filePath);
+    // See the note in src/tools/read.ts: sharp 0.35's default export is the
+    // constructor, so the old namespace cast no longer type-checks.
+    const { default: sharp } = await import('sharp');
+    const meta = await sharp(raw, { failOn: 'none' }).metadata();
+    let hasAlpha = false;
+    if (meta.hasAlpha) {
+      const stats = await sharp(raw, { failOn: 'none' }).stats();
+      const alpha = stats.channels[stats.channels.length - 1];
+      hasAlpha = alpha?.min !== undefined && alpha.min < 255;
+    }
+    const MAX_LONG_EDGE = 1280;
+    const longEdge = Math.max(meta.width ?? 0, meta.height ?? 0);
+    let pipeline = sharp(raw, { failOn: 'none' });
+    if (longEdge > MAX_LONG_EDGE) {
+      pipeline = pipeline.resize({
+        width: meta.width && meta.width >= (meta.height ?? 0) ? MAX_LONG_EDGE : undefined,
+        height: meta.height && meta.height > (meta.width ?? 0) ? MAX_LONG_EDGE : undefined,
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
+    }
+    const out = hasAlpha
+      ? await pipeline.png({ compressionLevel: 9 }).toBuffer()
+      : await pipeline.jpeg({ quality: 85, mozjpeg: true }).toBuffer();
+    fs.writeFileSync(filePath, out);
+    return { from: before, to: out.length };
+  } catch {
+    return null;
+  }
+}
+
+async function tryReadClipboardImage(): Promise<{ path: string; bytes: number; resizedFrom?: number } | { error: string } | null> {
+  const filename = `franklin-clip-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`;
+  const out = path.join(os.tmpdir(), filename);
+
+  if (process.platform === 'darwin') {
+    // pbpaste does NOT stream image bytes (its -Prefer only takes txt/rtf/ps);
+    // the supported path on macOS is AppleScript reading the clipboard as the
+    // PNGf class and writing the bytes itself. Returns "ok" / "no" so we can
+    // tell the difference between "no image on the clipboard" and "actual error".
+    let result: string;
+    try {
+      result = execFileSync('osascript', [
+        '-e', 'try',
+        '-e', `set the_data to the clipboard as «class PNGf»`,
+        '-e', `set fp to (open for access POSIX file "${out}" with write permission)`,
+        '-e', 'write the_data to fp',
+        '-e', 'close access fp',
+        '-e', 'return "ok"',
+        '-e', 'on error',
+        '-e', 'return "no"',
+        '-e', 'end try',
+      ], { timeout: 1500, encoding: 'utf8' }).trim();
+    } catch { return null; /* osascript missing or hung */ }
+    if (result !== 'ok') return null;
+  } else if (process.platform === 'linux') {
+    // wl-paste / xclip both stream image bytes to stdout. Try Wayland first
+    // (more common on modern distros), fall back to X11. Either may not be
+    // installed — that's fine, we just fall through to the text paste path.
+    let buf: Buffer | null = null;
+    try {
+      buf = execFileSync('wl-paste', ['--type', 'image/png'], { timeout: 1500, maxBuffer: 16 * 1024 * 1024 });
+    } catch { /* try xclip next */ }
+    if (!buf || buf.length === 0) {
+      try {
+        buf = execFileSync('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o'], { timeout: 1500, maxBuffer: 16 * 1024 * 1024 });
+      } catch { return null; }
+    }
+    if (!buf || buf.length === 0) return null;
+    try { fs.writeFileSync(out, buf); } catch (err) { return { error: `Failed to save clipboard image: ${(err as Error).message}` }; }
+  } else {
+    return null; // Windows / others not supported yet.
+  }
+
+  // Stat + magic-byte check. Cleans up the file if it's not a real image —
+  // belt-and-suspenders against osascript writing a weird non-PNG payload, or
+  // the clipboard tool returning something that isn't actually an image.
+  let stat: fs.Stats;
+  try { stat = fs.statSync(out); } catch { return null; }
+  if (stat.size === 0) { try { fs.unlinkSync(out); } catch { /* ok */ } return null; }
+  let resizedFrom: number | undefined;
+  if (stat.size > MAX_CLIPBOARD_IMG_BYTES) {
+    // Auto-shrink instead of hard-rejecting — Claude Code went through the
+    // same iteration after users hit "Image too large" on retina screenshots.
+    const r = await shrinkImageInPlace(out);
+    if (!r) {
+      try { fs.unlinkSync(out); } catch { /* ok */ }
+      return { error: `Image too large (${(stat.size / 1_000_000).toFixed(1)}MB) and could not be resized. Crop or re-save smaller.` };
+    }
+    resizedFrom = r.from;
+    // Re-stat for the post-resize size we'll show in the placeholder.
+    try { stat = fs.statSync(out); } catch { return null; }
+    if (stat.size > MAX_CLIPBOARD_IMG_BYTES) {
+      // Defensive: if the resize somehow didn't bring it under the cap (highly
+      // unusual at 1280px JPEG q85), bail rather than ship an oversize payload.
+      try { fs.unlinkSync(out); } catch { /* ok */ }
+      return { error: `Image still ${(stat.size / 1_000_000).toFixed(1)}MB after resize. Crop manually.` };
+    }
+  }
+  try {
+    const head = fs.readFileSync(out, { encoding: null }).subarray(0, 4);
+    const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+    const isJpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+    if (!isPng && !isJpeg) { try { fs.unlinkSync(out); } catch { /* ok */ } return null; }
+  } catch { return null; }
+
+  return { path: out, bytes: stat.size, resizedFrom };
+}
+
+function pasteSummary(block: { content: string; kind: 'text' | 'image' }): string {
+  if (block.kind === 'image') {
+    // content is the absolute path; show the basename + size hint so the user
+    // can tell which image they pasted when they have several.
+    let sizeLabel = '';
+    try {
+      const stat = fs.statSync(block.content);
+      sizeLabel = stat.size >= 1024
+        ? ` ${(stat.size / 1024).toFixed(0)}KB`
+        : ` ${stat.size}B`;
+    } catch { /* file gone? show without size */ }
+    return `[Image${sizeLabel}]`;
+  }
+  const lines = block.content.length === 0 ? 0 : block.content.split('\n').length;
   const lineLabel = lines > 1 ? `~${lines} lines` : '~1 line';
   return `[Pasted ${lineLabel}]`;
 }
@@ -115,7 +347,7 @@ function renderInputValue(value: string, cursorOffset: number, focused: boolean)
     for (const block of blocks) {
       rendered += renderPlainInputSegment(value.slice(cursor, block.start), cursorOffset - cursor, focused && cursorOffset >= cursor && cursorOffset <= block.start);
       if (focused && cursorOffset === block.start) rendered += chalk.inverse(' ');
-      rendered += chalk.hex(USER_PROMPT_COLOR).bold(pasteSummary(block.content));
+      rendered += chalk.hex(USER_PROMPT_COLOR).bold(pasteSummary(block));
       if (focused && cursorOffset === block.end) rendered += chalk.inverse(' ');
       cursor = block.end;
     }
@@ -169,6 +401,15 @@ function PromptTextInput({ value, onChange, onSubmit, placeholder = '', focus = 
     setCursorOffset(cursorOffsetRef.current);
   }, [onChange]);
 
+  const insertClipboardImageAt = useCallback((insertAt: number) => {
+    readClipboardImageInjection().then((injected) => {
+      if (!injected) return; // no image on clipboard — nothing to do
+      const cur = valueRef.current;
+      const at = Math.min(insertAt, cur.length);
+      updateValue(cur.slice(0, at) + injected + cur.slice(at), at + injected.length);
+    }).catch(() => { /* best-effort */ });
+  }, [updateValue]);
+
   useInput((input, key) => {
     if (!focus) return;
 
@@ -187,7 +428,7 @@ function PromptTextInput({ value, onChange, onSubmit, placeholder = '', focus = 
     }
 
     if (key.return && !isPasting) {
-      onSubmit(decodePromptValue(currentValue));
+      onSubmit(currentValue);
       return;
     }
 
@@ -239,6 +480,14 @@ function PromptTextInput({ value, onChange, onSubmit, placeholder = '', focus = 
       return;
     }
 
+    // Some Linux terminals do not emit a bracketed-paste event for image-only
+    // clipboard contents. Ctrl+V gives users a raw-key fallback that probes the
+    // same clipboard image path without relying on terminal paste behavior.
+    if (key.ctrl && input === 'v') {
+      insertClipboardImageAt(currentCursorOffset);
+      return;
+    }
+
     if (key.upArrow || key.downArrow || key.tab || key.ctrl || key.meta) return;
 
     let text = normalizeInputNewlines(stripPasteMarkers(input));
@@ -250,12 +499,63 @@ function PromptTextInput({ value, onChange, onSubmit, placeholder = '', focus = 
       if (!hasPasteEnd) return;
 
       const buffered = pasteBufferRef.current;
-      const lineCount = buffered.length === 0 ? 0 : buffered.split('\n').length;
-      text = lineCount >= PASTE_COLLAPSE_LINE_THRESHOLD
-        ? encodePasteBlock(buffered)
-        : buffered;
       pasteBufferRef.current = '';
       pasteActiveRef.current = false;
+
+      // Image-paste detection. Cmd+V on a clipboard image arrives as an empty
+      // bracketed paste on macOS Terminal/iTerm2; several Linux terminals
+      // instead emit a filename, a `file://` URI, or the raw image header
+      // alongside it (3.25.0 only probed on an empty buffer, so those Linux
+      // shapes silently dropped the image — fixed in #77). We probe the system
+      // clipboard for an image only when the buffer *looks* like one of those
+      // stubs; genuine text is inserted synchronously below so the common
+      // paste path never waits on the async osascript / xclip / wl-paste
+      // shell-out (30-100 ms, but a cold spawn can be more).
+      const insertAt = currentCursorOffset;
+      const insertPastedText = (buf: string, baseOffset: number) => {
+        if (buf.length === 0) return;
+        const lineCount = buf.split('\n').length;
+        const textToInsert = lineCount >= PASTE_COLLAPSE_LINE_THRESHOLD
+          ? encodePasteBlock(buf)
+          : buf;
+        const cur = valueRef.current;
+        const at = Math.min(baseOffset, cur.length);
+        updateValue(cur.slice(0, at) + textToInsert + cur.slice(at), at + textToInsert.length);
+      };
+
+      if (looksLikeImagePasteStub(buffered)) {
+        // The probe is async; the handler returns now and updateValue happens
+        // when the Promise resolves. insertAt (captured above) pins the result
+        // to where the user pasted even if the cursor moved meanwhile.
+        tryReadClipboardImage().then((img) => {
+          if (img && 'path' in img) {
+            // Image wins — drop the bracketed-paste buffer (the terminal stub).
+            const injected = encodeImageBlock(img.path);
+            const cur = valueRef.current;
+            const at = Math.min(insertAt, cur.length);
+            updateValue(cur.slice(0, at) + injected + cur.slice(at), at + injected.length);
+            return;
+          }
+          if (img && 'error' in img) {
+            const injected = `[Image rejected: ${img.error}] `;
+            const cur = valueRef.current;
+            const at = Math.min(insertAt, cur.length);
+            updateValue(cur.slice(0, at) + injected + cur.slice(at), at + injected.length);
+            return;
+          }
+          // No image after all — the stub was literal text (e.g. a lone
+          // "photo.png" the user actually typed). Insert it as text.
+          insertPastedText(buffered, insertAt);
+        }).catch(() => {
+          // Probe failed unexpectedly — don't lose the paste; insert as text.
+          insertPastedText(buffered, insertAt);
+        });
+        return;
+      }
+
+      // Genuine text paste — insert synchronously, no clipboard probe.
+      insertPastedText(buffered, currentCursorOffset);
+      return;
     }
 
     if (!text) {
@@ -279,7 +579,7 @@ function PromptTextInput({ value, onChange, onSubmit, placeholder = '', focus = 
 }
 
 function formatUserPromptForDisplay(value: string): string {
-  return `❯ ${decodePromptValue(value)}`;
+  return `❯ ${promptValueForDisplay(value)}`;
 }
 
 function disableTerminalAutoWrap(): (() => void) | undefined {
@@ -411,6 +711,7 @@ function InputBox({ input, setInput, onSubmit, model, balance, chain, walletTail
               focus={focused !== false}
               showMode={true}
               onModeChange={onVimModeChange}
+              onClipboardImage={readClipboardImageInjection}
             />
           ) : (
             <PromptTextInput
@@ -489,9 +790,18 @@ function formatAgentErrorForDisplay(error: string): string {
   return out.join('\n');
 }
 
-// Picker model list is imported from ./model-picker.js (single source of truth).
-// PICKER_CATEGORIES provides grouped data for rendering; PICKER_MODELS_FLAT
-// provides a flat array for pickerIdx navigation.
+function fitPickerText(value: string, width: number): string {
+  if (value.length <= width) return value.padEnd(width);
+  if (width <= 1) return value.slice(0, width);
+  return `${value.slice(0, width - 1)}…`;
+}
+
+// Picker model list is imported from ./model-picker.js (single source of truth
+// for curation). PICKER_CATEGORIES is the static editorial list, used as the
+// initial paint and the offline fallback; getPickerCategories() reconciles the
+// curated list against the live gateway catalog. Ctrl+A expands the picker via
+// getExpandedPickerCategories() to show every live chat model grouped by
+// provider.
 
 interface ToolStatus {
   name: string;
@@ -572,6 +882,17 @@ function RunCodeApp({
   // Short preview of latest response shown in dynamic area (last ~5 lines, cleared on next turn)
   const [responsePreview, setResponsePreview] = useState('');
   const [currentModel, setCurrentModel] = useState(initialModel || PICKER_MODELS_FLAT[0].id);
+  // Gateway-reconciled picker list. Seeded with the static curation so the
+  // first paint is instant and an offline session still gets a usable picker;
+  // replaced by the hydrated list once the catalog fetch lands.
+  const [pickerCats, setPickerCats] = useState<ModelCategory[]>(PICKER_CATEGORIES);
+  const [pickerMoreCount, setPickerMoreCount] = useState(0);
+  const [pickerExpanded, setPickerExpanded] = useState(false);
+  const pickerFlat = useMemo(() => pickerCats.flatMap(c => c.models), [pickerCats]);
+  // Track the live model without re-firing the hydration effect on every model
+  // change — the effect should run when the picker opens, not when the model
+  // switches, but it still needs the current id to re-anchor the cursor.
+  const currentModelRef = useRef(initialModel);
   const [ready, setReady] = useState(!startWithPicker);
   const [mode, setMode] = useState<UIMode>(startWithPicker ? 'model-picker' : 'input');
   const [pickerIdx, setPickerIdx] = useState(0);
@@ -608,6 +929,35 @@ function RunCodeApp({
   // tab and the agent stops to ask for approval — verified 2026-05-04
   // from a real screenshot where the user missed the dialog because the
   // input box still read "Working...". Opt-out via FRANKLIN_NO_BELL=1.
+  // Single sync point for currentModelRef — cheaper to keep correct than
+  // updating the ref at every setCurrentModel call site.
+  useEffect(() => { currentModelRef.current = currentModel; }, [currentModel]);
+
+  // Reconcile the picker against the live gateway catalog whenever it opens —
+  // covers both /model with no args and --model-picker startup. Runs in the
+  // background: the picker has already painted from the static curation (or the
+  // 5-min cached catalog), so a slow gateway delays nothing. gateway-models.ts
+  // dedupes concurrent fetches and serves stale-on-error, so re-opening the
+  // picker is cheap and an offline session simply keeps the static list.
+  useEffect(() => {
+    if (mode !== 'model-picker') return;
+    let cancelled = false;
+    void (pickerExpanded ? getExpandedPickerCategories() : getPickerCategories())
+      .then(({ categories, moreCount, live }) => {
+        if (cancelled || !live) return;
+        setPickerCats(categories);
+        setPickerMoreCount(moreCount);
+        // Rows may have dropped out from under the cursor — re-anchor on the
+        // model actually in use rather than leaving the highlight on whatever
+        // slid into that index.
+        const flat = categories.flatMap(c => c.models);
+        const at = flat.findIndex(m => m.id === currentModelRef.current);
+        setPickerIdx(at >= 0 ? at : 0);
+      })
+      .catch(() => { /* keep the static list — the picker must stay usable */ });
+    return () => { cancelled = true; };
+  }, [mode, pickerExpanded]);
+
   const bellPlayedRef = useRef(false);
   useEffect(() => {
     const dialogActive = !!permissionRequest || !!askUserRequest;
@@ -780,9 +1130,10 @@ function RunCodeApp({
     }
   }, { isActive: !!permissionRequest });
 
-  // Key handler for picker + esc + abort
-  const isPickerOrEsc = mode === 'model-picker' || (mode === 'input' && ready && !input) || !ready;
-  useInput((_ch, key) => {
+  // Key handler for picker + abort. Esc aborts active work or closes dialogs;
+  // it must not exit the app while idle — Ctrl+C and /exit are the exit paths.
+  const isPickerOrAbort = mode === 'model-picker' || !ready;
+  useInput((ch, key) => {
     // Escape during generation → abort current turn (skip if permission dialog open)
     if (key.escape && !ready && !permissionRequest) {
       onAbort();
@@ -793,20 +1144,23 @@ function RunCodeApp({
       return;
     }
 
-    // Esc to quit (only when input is empty and in input mode)
-    // In Vim mode: Esc goes to normal mode (handled by VimInput), only quit on Esc in normal mode with empty input
-    if (key.escape && mode === 'input' && ready && !input) {
-      if (vimEnabled && currentVimMode === 'insert') return; // Let VimInput handle Esc → normal
-      requestExit(false);
-      return;
-    }
-
     // Arrow key navigation for model picker
     if (mode !== 'model-picker') return;
+    if (key.ctrl && ch === 'a') {
+      const nextExpanded = !pickerExpanded;
+      setPickerExpanded(nextExpanded);
+      if (!nextExpanded) setPickerCats(PICKER_CATEGORIES);
+      setPickerMoreCount(0);
+      setPickerIdx(0);
+      return;
+    }
     if (key.upArrow) setPickerIdx(i => Math.max(0, i - 1));
-    else if (key.downArrow) setPickerIdx(i => Math.min(PICKER_MODELS_FLAT.length - 1, i + 1));
+    else if (key.downArrow) setPickerIdx(i => Math.min(pickerFlat.length - 1, i + 1));
     else if (key.return) {
-      const selected = PICKER_MODELS_FLAT[pickerIdx];
+      // Hydration can shrink the list under the cursor (a retired row drops
+      // out), so treat the index as untrusted rather than assuming a hit.
+      const selected = pickerFlat[pickerIdx] ?? pickerFlat[0];
+      if (!selected) return;
       setCurrentModel(selected.id);
       onModelChange(selected.id, 'user');
       showStatus(`Model → ${selected.label}`, 'success', 3000);
@@ -815,16 +1169,18 @@ function RunCodeApp({
       // the picker closed, which is both confusing and a privacy risk.
       setInput('');
       setHistoryIdx(-1);
+      setPickerExpanded(false);
       setMode('input');
       setReady(true);
     }
     else if (key.escape) {
       setInput('');
       setHistoryIdx(-1);
+      setPickerExpanded(false);
       setMode('input');
       setReady(true);
     }
-  }, { isActive: isPickerOrEsc });
+  }, { isActive: isPickerOrAbort });
 
   // Tab key: toggle expand/collapse on the last completed tool
   useInput((_ch, key) => {
@@ -895,12 +1251,17 @@ function RunCodeApp({
             onModelChange(resolved, 'user');
             showStatus(`Model → ${resolved}`, 'success', 3000);
           } else {
-            const idx = PICKER_MODELS_FLAT.findIndex(m => m.id === currentModel);
+            const idx = pickerFlat.findIndex(m => m.id === currentModel);
             setPickerIdx(idx >= 0 ? idx : 0);
+            // Gateway reconciliation is kicked off by an effect on picker mode
+            // (see below), so it covers this path and --model-picker startup.
             // Defensive: ensure no draft text survives into the picker —
             // closing handlers clear input too, so both ends are covered.
             setInput('');
             setHistoryIdx(-1);
+            setPickerExpanded(false);
+            setPickerCats(PICKER_CATEGORIES);
+            setPickerMoreCount(0);
             setMode('model-picker');
           }
           return;
@@ -958,18 +1319,21 @@ function RunCodeApp({
           turnTierRef.current = undefined;
           turnSavingsRef.current = undefined;
           turnCtxPctRef.current = undefined;
-          onSubmit(lastPrompt);
+          onSubmit(decodePromptValue(lastPrompt).trim());
           return;
 
         default:
-          // All other slash commands pass through to the agent loop's command registry
+          // All other slash commands pass through to the agent loop's command registry.
+          // Decode here too: a slash command can carry an encoded paste/image block
+          // as an argument, and the registry expects real text / file paths,
+          // not the encoded block sentinels.
           setStreamText('');
           setThinking(false);
           setThinkingText('');
           setTools(new Map());
           setWaiting(true);
           setReady(false);
-          onSubmit(trimmed);
+          onSubmit(decodePromptValue(trimmed).trim());
           return;
       }
     }
@@ -1008,7 +1372,7 @@ function RunCodeApp({
     turnTierRef.current = undefined;
     turnSavingsRef.current = undefined;
     turnCtxPctRef.current = undefined;
-    onSubmit(trimmed);
+    onSubmit(decodePromptValue(trimmed).trim());
   }, [ready, currentModel, totalCost, onSubmit, onModelChange, requestExit, lastPrompt, inputHistory, showStatus]);
 
   // Mouse support — OFF by default because Node stdin is shared: mouse escape
@@ -1673,7 +2037,7 @@ function RunCodeApp({
           markers. Same reason as streamText — Ink wipes scrollback the moment
           dynamic output exceeds the terminal height. */}
       {inPicker && (() => {
-        const totalModels = PICKER_MODELS_FLAT.length;
+        const totalModels = pickerFlat.length;
         const maxModels = Math.max(6, termRows - 12);
         let start = Math.max(0, pickerIdx - Math.floor(maxModels / 2));
         let end = Math.min(totalModels, start + maxModels);
@@ -1685,7 +2049,7 @@ function RunCodeApp({
         // Pre-compute each category's base offset into the flat model list so
         // we can map (cat, localIdx) → globalIdx in one pass without re-walking.
         let cursor = 0;
-        const catBases = PICKER_CATEGORIES.map((cat) => {
+        const catBases = pickerCats.map((cat) => {
           const base = cursor;
           cursor += cat.models.length;
           return base;
@@ -1694,14 +2058,14 @@ function RunCodeApp({
           <Box flexDirection="column" marginTop={1}>
             <Box marginLeft={2}>
               <Text bold>Select a model </Text>
-              <Text dimColor>(↑↓ navigate, Enter select, Esc cancel)</Text>
+              <Text dimColor>(↑↓ navigate, Enter select, Ctrl+A {pickerExpanded ? 'curated' : 'all models'}, Esc cancel)</Text>
             </Box>
             {hiddenAbove > 0 && (
               <Box marginLeft={2} marginTop={1}>
                 <Text dimColor>↑ {hiddenAbove} more above</Text>
               </Box>
             )}
-            {PICKER_CATEGORIES.map((cat, catIdx) => {
+            {pickerCats.map((cat, catIdx) => {
               const base = catBases[catIdx];
               const visible = cat.models
                 .map((m, localIdx) => ({ m, globalIdx: base + localIdx }))
@@ -1723,9 +2087,9 @@ function RunCodeApp({
                           color={isSelected ? 'cyan' : isHighlight ? 'yellow' : undefined}
                           bold={isSelected || isHighlight}
                         >
-                          {' '}{m.label.padEnd(26)}{' '}
+                          {' '}{fitPickerText(m.label, 26)}{' '}
                         </Text>
-                        <Text dimColor> {m.shortcut.padEnd(14)}</Text>
+                        <Text dimColor> {fitPickerText(m.shortcut, 14)}</Text>
                         <Text
                           color={m.price === 'FREE' ? 'green' : isHighlight ? 'yellow' : undefined}
                           dimColor={!isHighlight && m.price !== 'FREE'}
@@ -1742,6 +2106,13 @@ function RunCodeApp({
             {hiddenBelow > 0 && (
               <Box marginLeft={2} marginTop={1}>
                 <Text dimColor>↓ {hiddenBelow} more below</Text>
+              </Box>
+            )}
+            {pickerMoreCount > 0 && (
+              <Box marginTop={1} marginLeft={2}>
+                <Text dimColor>
+                  + {pickerMoreCount} more on gateway — Ctrl+A to show all, or /model &lt;id&gt; to pick one
+                </Text>
               </Box>
             )}
             <Box marginTop={1} marginLeft={2}>

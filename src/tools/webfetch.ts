@@ -4,6 +4,8 @@
 
 import type { CapabilityHandler, CapabilityResult, ExecutionScope } from '../agent/types.js';
 import { USER_AGENT } from '../config.js';
+import { frameUntrusted } from './untrusted.js';
+import { isBlockedSsrfHost, ssrfSafeFetch } from './ssrf.js';
 
 interface WebFetchInput {
   url: string;
@@ -81,6 +83,12 @@ async function execute(input: Record<string, unknown>, ctx: ExecutionScope): Pro
     return { output: `Error: only http/https URLs are supported`, isError: true };
   }
 
+  // SSRF guard: never fetch loopback/private/link-local/metadata hosts unless
+  // the operator explicitly opts in (e.g. to hit a local dev server).
+  if (isBlockedSsrfHost(parsed.hostname) && process.env.FRANKLIN_ALLOW_PRIVATE_FETCH !== '1') {
+    return { output: `Error: refusing to fetch a private/loopback/metadata address: ${parsed.hostname} (set FRANKLIN_ALLOW_PRIVATE_FETCH=1 to allow).`, isError: true };
+  }
+
   // ── Pre-flight: known anti-bot domains ──
   // Sites that systematically block scripted access return 403 / 429 /
   // captcha challenges to plain GET requests no matter what UA we send.
@@ -144,13 +152,16 @@ async function execute(input: Record<string, unknown>, ctx: ExecutionScope): Pro
   ctx.abortSignal.addEventListener('abort', onAbort, { once: true });
 
   try {
-    const response = await fetch(url, {
+    // ssrfSafeFetch follows redirects MANUALLY and re-checks the host on every
+    // hop — a plain redirect:'follow' would let a public URL 302 to a
+    // loopback/metadata address, defeating the guard above.
+    const response = await ssrfSafeFetch(url, {
       signal: controller.signal,
       headers: {
         'User-Agent': USER_AGENT,
         'Accept': 'text/html,application/json,text/plain,*/*',
       },
-      redirect: 'follow',
+      allowPrivate: process.env.FRANKLIN_ALLOW_PRIVATE_FETCH === '1',
     });
 
     if (!response.ok) {
@@ -213,7 +224,7 @@ async function execute(input: Record<string, unknown>, ctx: ExecutionScope): Pro
       body = rawBody.slice(0, maxLen);
     }
 
-    let output = `URL: ${url}\nStatus: ${response.status}\nContent-Type: ${contentType}\n\n${body}`;
+    let output = `URL: ${url}\nStatus: ${response.status}\nContent-Type: ${contentType}\n\n${frameUntrusted('Fetched web page', body)}`;
 
     if (totalBytes >= readBudget || rawBody.length > maxLen) {
       output += '\n\n... (content truncated)';

@@ -11,10 +11,15 @@ import {
   addObservation, upsertRelation, isJunkEntityName,
 } from './store.js';
 
+// Last entry is the free safety net. nvidia/nemotron-super-49b held it until
+// 2026-08-20, by which point it had left the catalog entirely — the free pool
+// answers for it with a substitute, so the "free fallback" was neither the
+// model named nor reliably shaped. nemotron-nano-9b-v2 is the current free
+// default and verifiably serves itself.
 const EXTRACTION_MODELS = [
   'google/gemini-2.5-flash-lite',
   'google/gemini-2.5-flash',
-  'nvidia/nemotron-super-49b',
+  'nvidia/nemotron-nano-9b-v2',
 ];
 
 const VALID_TYPES = new Set<EntityType>(['person', 'project', 'company', 'product', 'concept']);
@@ -155,6 +160,16 @@ export async function extractBrainEntities(
     for (const obs of extracted.observations) {
       addObservation(entityId, obs, sessionId);
     }
+  }
+
+  // Merge in any entities a CONCURRENT extractor wrote while our (multi-second)
+  // extraction ran, so this full-file save doesn't silently clobber them — a
+  // real loss for users running a channel daemon alongside the CLI. Best-effort:
+  // the brain is a recall cache and a same-entity observation race can still
+  // drop an observation, but brand-new entities are preserved and self-heal.
+  const haveIds = new Set(entities.map((e) => e.id));
+  for (const onDisk of loadEntities()) {
+    if (!haveIds.has(onDisk.id)) entities.push(onDisk);
   }
 
   saveEntities(entities);

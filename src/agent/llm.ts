@@ -287,8 +287,14 @@ export function extractApiErrorMessage(errorBody: string): string {
  */
 export function modelHasExtendedThinking(model: string): boolean {
   const m = model.toLowerCase();
-  // Excluded: Opus 4.7+ uses adaptive thinking; sending `thinking: enabled`
-  // causes the API to 400.
+  // Excluded: Opus 4.7+, Sonnet 5, and Fable 5 use adaptive / always-on
+  // thinking; sending an explicit `thinking: enabled` causes the API to 400.
+  // Opus 5 goes further — thinking is ON by default (omitting the field runs
+  // adaptive, unlike 4.8/4.7 where omitting it meant no thinking), and
+  // `budget_tokens` is rejected outright. Listed explicitly rather than left
+  // to fall through, so the allowlist stays readable as the source of truth.
+  if (m.includes('opus-5') || m.includes('opus5')) return false;
+  if (m.includes('sonnet-5') || m.includes('fable-5')) return false;
   if (m.includes('opus-4.8') || m.includes('opus-4-8')) return false;
   if (m.includes('opus-4.7') || m.includes('opus-4-7')) return false;
   return (
