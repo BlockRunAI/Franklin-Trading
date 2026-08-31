@@ -19,7 +19,7 @@ Fund the wallet. Set a budget. Walk away — and come back to a book.
 > general-purpose Autonomous Economic Agent — specialized as a wallet-native trading
 > agent. It inherits Franklin's economic substrate (x402 micropayments, USDC settlement,
 > the shared [Router Core](https://github.com/BlockRunAI/router-core) engine across
-> <!-- br:models.chatVisible -->72<!-- /br:models.chatVisible --> models, removable-by-design harness components)
+> <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> models, removable-by-design harness components)
 > and adds a deterministic fee-aware risk engine, a wallet-bound trade journal, a
 > multi-role persona debate, and a Backtest → Paper → Live strategy lifecycle.
 
@@ -31,7 +31,7 @@ and is covered by the local test suite (386 tests, no network).
 | Capability | Status | Where |
 |---|---|---|
 | USDC wallet on Base or Solana, x402 pay-per-call to every model and paid API | ✅ shipped | `src/wallet/`, `@blockrun/llm` |
-| Auto model routing on the shared Router Core engine, <!-- br:models.chatVisible -->72<!-- /br:models.chatVisible --> models, dead-model kill-switch | ✅ shipped | `src/router/` |
+| Auto model routing on the shared Router Core engine, <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> models, dead-model kill-switch | ✅ shipped | `src/router/` |
 | Paper trading against **live** CoinGecko marks (real P&L, simulated fills) | ✅ shipped | `src/trading/live-exchange.ts` |
 | Deterministic risk engine: cash **including exchange fee**, per-position cap, total exposure cap, sell integrity | ✅ shipped | `src/trading/risk.ts` |
 | Record-then-flag execution: a fill the venue executed is always booked; deviations are warnings, never silent drops | ✅ shipped | `src/trading/engine.ts` |
@@ -149,7 +149,7 @@ You don't pick models. `Auto` (the default) runs the shared
 Franklin, ClawRouter and `@blockrun/llm` make — classifying the request across 15 dimensions,
 dropping every model that cannot satisfy it (tools, vision, context, output length), and
 ranking the survivors on fit, cost, speed and reliability. Sub-millisecond, no network on the
-hot path, <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5 for everything.
+hot path, <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5 for everything.
 
 A model the gateway stops serving is removed from every chain on the next request (the
 dead-rung kill-switch), so a retired id never strands a turn.
@@ -180,7 +180,7 @@ Pin one with `/model <shortcut>` when you want to:
 | | `omni` | Nemotron 3 Nano Omni (text + image + audio) | $0 |
 | | `nano-vl` | Nemotron Nano VL | $0 |
 
-The full catalog — <!-- br:models.totalVisible -->96<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
+The full catalog — <!-- br:models.totalVisible -->100<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
 [blockrun.ai/models](https://blockrun.ai/models). Pricing is provider cost + 5%, settled per
 call in USDC. No free alias ever falls back to a paid model.
 
