@@ -1,3 +1,4 @@
+import { gatewayFetch as fetch, accountMode } from '../payments/account.js';
 /**
  * LLM Client for Franklin
  * Calls BlockRun API directly with x402 payment handling and streaming.
@@ -644,7 +645,7 @@ export class ModelClient {
       );
 
       // Handle x402 payment
-      if (response.status === 402) {
+      if (response.status === 402 && !accountMode()) {
         if (this.debug) console.error('[franklin] Payment required — signing...');
         const paymentHeader = await this.signPayment(response, request.model);
         if (!paymentHeader) {
@@ -723,7 +724,7 @@ export class ModelClient {
             createModelTimeoutError('request', request.model, requestTimeoutMs),
             requestTimeoutMs,
           );
-          if (response.status === 402) {
+          if (response.status === 402 && !accountMode()) {
             const paymentHeader = await this.signPayment(response, request.model);
             if (!paymentHeader) {
               yield { kind: 'error', payload: { message: 'Payment signing failed' } };

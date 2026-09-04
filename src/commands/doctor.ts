@@ -22,6 +22,13 @@ import {
 import { loadChain, API_URLS, VERSION, BLOCKRUN_DIR } from '../config.js';
 import { isTelemetryEnabled, readAllRecords, telemetryPaths } from '../telemetry/store.js';
 import { getAvailableUpdateFresh, kickoffVersionCheck } from '../version-check.js';
+import {
+  accountBaseURL,
+  accountMode,
+  ACCOUNT_PORTAL,
+  gatewayFetch,
+  validateAccountConfig,
+} from '../payments/account.js';
 
 interface Check {
   name: string;
@@ -32,6 +39,20 @@ interface Check {
 
 async function runChecks(): Promise<Check[]> {
   const out: Check[] = [];
+
+  if (accountMode()) {
+    try {
+      validateAccountConfig();
+      out.push({ name: 'API authentication', status: 'ok', detail: `configured · ${ACCOUNT_PORTAL}/dashboard` });
+    } catch (err) {
+      out.push({
+        name: 'API authentication',
+        status: 'fail',
+        detail: (err as Error).message,
+        remedy: `Create a key at ${ACCOUNT_PORTAL}/dashboard/keys`,
+      });
+    }
+  }
 
   // Kick off the authoritative version fetch FIRST, in parallel with the
   // other checks. Doctor is a diagnostic — the user just asked "am I
@@ -100,7 +121,7 @@ async function runChecks(): Promise<Check[]> {
       name: 'Chain',
       status: 'fail',
       detail: `failed to load — ${(err as Error).message}`,
-      remedy: 'Run: franklin setup base  (or: franklin setup solana)',
+      remedy: 'Run: franklin-trading setup solana  (or: franklin-trading setup base)',
     });
   }
 
@@ -119,7 +140,7 @@ async function runChecks(): Promise<Check[]> {
         walletBalance = await client.getBalance();
       }
       out.push({
-        name: 'Wallet',
+        name: accountMode() ? 'Transaction wallet' : 'Wallet',
         status: 'ok',
         detail: `${walletAddress.slice(0, 10)}…${walletAddress.slice(-6)}`,
       });
@@ -143,7 +164,7 @@ async function runChecks(): Promise<Check[]> {
           ? `Send USDC on ${chain} to ${walletAddress} (or open http://localhost:3100/#wallet)`
           : undefined;
       out.push({
-        name: 'USDC balance',
+        name: accountMode() ? 'Transaction wallet USDC' : 'USDC balance',
         status: balanceStatus,
         detail: balanceDetail,
         remedy: balanceRemedy,
@@ -151,12 +172,12 @@ async function runChecks(): Promise<Check[]> {
     } catch (err) {
       const msg = (err as Error).message || '';
       out.push({
-        name: 'Wallet',
-        status: 'fail',
+        name: accountMode() ? 'Transaction wallet' : 'Wallet',
+        status: accountMode() ? 'warn' : 'fail',
         detail: `error — ${msg.slice(0, 120)}`,
         remedy:
           msg.includes('ENOENT') || msg.includes('wallet') || msg.includes('key')
-            ? 'Run: franklin setup'
+            ? 'Run: franklin-trading setup before live trading'
             : 'Check network / wallet file permissions',
       });
     }
@@ -164,15 +185,17 @@ async function runChecks(): Promise<Check[]> {
 
   // ── 6. Gateway reachability ───────────────────────────────────────
   if (chain) {
-    const apiUrl = API_URLS[chain];
+    const apiUrl = accountMode() ? accountBaseURL() : API_URLS[chain];
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 5000);
-      const res = await fetch(`${apiUrl}/health`, { signal: ctl.signal }).catch(() => null);
+      const res = accountMode()
+        ? await gatewayFetch(`${apiUrl}/v1/models`, { signal: ctl.signal }).catch(() => null)
+        : await fetch(`${apiUrl}/health`, { signal: ctl.signal }).catch(() => null);
       clearTimeout(t);
       if (res && res.ok) {
         out.push({
-          name: 'Gateway',
+          name: accountMode() ? 'Account API' : 'Gateway',
           status: 'ok',
           detail: apiUrl,
         });
@@ -181,16 +204,16 @@ async function runChecks(): Promise<Check[]> {
         // don't expose /health but the API is up.
         const ctl2 = new AbortController();
         const t2 = setTimeout(() => ctl2.abort(), 5000);
-        const res2 = await fetch(`${apiUrl}/v1/messages`, {
+        const res2 = accountMode() ? null : await fetch(`${apiUrl}/v1/messages`, {
           method: 'HEAD',
           signal: ctl2.signal,
         }).catch(() => null);
         clearTimeout(t2);
         out.push({
-          name: 'Gateway',
+          name: accountMode() ? 'Account API' : 'Gateway',
           status: res2 ? 'ok' : 'fail',
-          detail: res2 ? apiUrl : `unreachable: ${apiUrl}`,
-          remedy: res2 ? undefined : 'Check network or try the other chain',
+          detail: res2 ? apiUrl : `unreachable or unauthorized: ${apiUrl}`,
+          remedy: res2 ? undefined : (accountMode() ? `Check your key at ${ACCOUNT_PORTAL}/dashboard/keys` : 'Check network or try the other chain'),
         });
       }
     } catch (err) {

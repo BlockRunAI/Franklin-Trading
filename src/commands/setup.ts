@@ -1,3 +1,4 @@
+import { accountMode, ACCOUNT_PORTAL, validateAccountConfig } from '../payments/account.js';
 import chalk from 'chalk';
 import {
   getOrCreateWallet,
@@ -8,6 +9,11 @@ import {
 import { type Chain, saveChain } from '../config.js';
 
 export async function setupCommand(chainArg?: string) {
+  if (accountMode()) {
+    validateAccountConfig();
+    console.log(chalk.cyan(`Account API billing configured: ${ACCOUNT_PORTAL}/dashboard`));
+    console.log(chalk.dim('Setting up the separate transaction wallet used for on-chain trades.\n'));
+  }
   // Solana is the default chain; `franklin setup base` opts into Base.
   const chain: Chain =
     chainArg === 'base' ? 'base' : 'solana';

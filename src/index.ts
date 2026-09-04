@@ -36,16 +36,16 @@ const program = new Command();
 program
   .name('franklin-trading')
   .description(
-    'Franklin Trading — The AI trading agent with a wallet.\n\n' +
+    'Franklin Trading — The AI trading agent with account API and wallet support.\n\n' +
       'Researches, debates, backtests, paper-trades and live-trades autonomously.\n' +
-      'Every decision is a multi-persona debate; every fill has an on-chain x402 USDC receipt.\n\n' +
-      'Fund your wallet. Set a budget. Walk away — and come back to a book.'
+      'API keys pay for AI and data; transaction wallets sign live trades.\n\n' +
+      'Set a budget. Walk away — and come back to a book.'
   )
   .version(version);
 
 program
   .command('setup [chain]')
-  .description('Create a new wallet for payments (base or solana)')
+  .description('Create a transaction wallet for live trades (solana or base)')
   .action((chain) => setupCommand(chain));
 
 program
@@ -80,7 +80,7 @@ program
 
 program
   .command('proxy')
-  .description('Run payment proxy for Anthropic-compatible CLI agents')
+  .description('Run an API-key or x402 proxy for Anthropic-compatible CLI agents')
   .option('-p, --port <port>', 'Proxy port', '8402')
   .option(
     '-m, --model <model>',

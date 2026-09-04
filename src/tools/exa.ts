@@ -1,3 +1,4 @@
+import { gatewayFetch as fetch, accountMode } from '../payments/account.js';
 /**
  * Exa research capabilities — neural web search, cited Q&A, and batch
  * URL content fetch via the BlockRun `/v1/exa/*` endpoints.
@@ -63,7 +64,7 @@ async function postWithPayment<T>(
       body: bodyStr,
     });
 
-    if (response.status === 402) {
+    if (response.status === 402 && !accountMode()) {
       const paymentHeaders = await signPayment(response, chain, endpoint);
       if (!paymentHeaders) {
         throw new Error('Payment signing failed — check wallet balance');
@@ -86,6 +87,16 @@ async function postWithPayment<T>(
     clearTimeout(timeout);
     ctx.abortSignal.removeEventListener('abort', onAbort);
   }
+}
+
+/** The gateway historically wrapped Exa payloads in `data`; the account API
+ * returns the same fields at the top level. Accept both wire shapes. */
+function responseData<T>(response: unknown): T {
+  if (response && typeof response === 'object' && 'data' in response) {
+    const wrapped = (response as { data?: unknown }).data;
+    if (wrapped && typeof wrapped === 'object') return wrapped as T;
+  }
+  return response as T;
 }
 
 async function signPayment(
@@ -212,7 +223,8 @@ export const exaSearchCapability: CapabilityHandler = {
 
     try {
       const res = await postWithPayment<ExaSearchResponse>('/v1/exa/search', params, ctx);
-      const hits = res.data?.results ?? [];
+      const data = responseData<ExaSearchResponse['data']>(res);
+      const hits = data.results ?? [];
       if (hits.length === 0) {
         return { output: `No Exa results for "${params.query}".` };
       }
@@ -222,7 +234,7 @@ export const exaSearchCapability: CapabilityHandler = {
         const score = h.score ? ` · score ${h.score.toFixed(2)}` : '';
         lines.push(`\n**${h.title}**${date}${score}\n${h.url}`);
       }
-      const cost = res.data?.costDollars?.total;
+      const cost = data.costDollars?.total;
       if (cost) lines.push(`\n_Cost: $${cost.toFixed(4)}_`);
       return { output: lines.join('\n') };
     } catch (err) {
@@ -270,14 +282,15 @@ export const exaAnswerCapability: CapabilityHandler = {
 
     try {
       const res = await postWithPayment<ExaAnswerResponse>('/v1/exa/answer', params, ctx);
-      const ans = res.data?.answer ?? '';
-      const cites = res.data?.citations ?? [];
+      const data = responseData<ExaAnswerResponse['data']>(res);
+      const ans = data.answer ?? '';
+      const cites = data.citations ?? [];
       const lines: string[] = [ans];
       if (cites.length > 0) {
         lines.push('\n**Sources**');
         for (const c of cites) lines.push(`- [${c.title}](${c.url})`);
       }
-      const cost = res.data?.costDollars?.total;
+      const cost = data.costDollars?.total;
       if (cost) lines.push(`\n_Cost: $${cost.toFixed(4)}_`);
       return { output: lines.join('\n') };
     } catch (err) {
@@ -338,7 +351,8 @@ export const exaReadUrlsCapability: CapabilityHandler = {
 
     try {
       const res = await postWithPayment<ExaContentsResponse>('/v1/exa/contents', params, ctx);
-      const results = res.data?.results ?? [];
+      const data = responseData<ExaContentsResponse['data']>(res);
+      const results = data.results ?? [];
       if (results.length === 0) {
         return { output: `No readable content returned for the ${params.urls.length} URL(s).` };
       }
@@ -346,7 +360,7 @@ export const exaReadUrlsCapability: CapabilityHandler = {
       for (const r of results) {
         lines.push(`\n### ${r.title ?? r.url}\n_Source: ${r.url}_\n\n${r.text}`);
       }
-      const cost = res.data?.costDollars?.total;
+      const cost = data.costDollars?.total;
       if (cost) lines.push(`\n_Cost: $${cost.toFixed(4)}_`);
       return { output: lines.join('\n') };
     } catch (err) {

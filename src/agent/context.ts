@@ -1,3 +1,4 @@
+import { accountMode, ACCOUNT_PORTAL } from '../payments/account.js';
 /**
  * Context Manager for Franklin
  * Assembles system instructions, reads project config, injects environment info.
@@ -181,17 +182,19 @@ Do NOT check access before acting. Do NOT explain what you tried. Just deliver, 
 }
 
 function getWalletKnowledgeSection(): string {
+  if (accountMode()) return `# BlockRun account billing
+Model, media, search and data requests use the configured API key. No payment wallet is needed for those calls. Account balance and usage: ${ACCOUNT_PORTAL}/dashboard; top up: ${ACCOUNT_PORTAL}/dashboard/credits. Never inspect or print BLOCKRUN_API_KEY. Actual on-chain trades and transactions still require a separately configured transaction wallet. Local model cost totals are estimates, not the account ledger.`;
   return `# Wallet Storage (answer "where is my wallet" directly — no searching)
 Franklin Trading stores wallet keys in ~/.blockrun/. When the user asks about wallet location, answer from this map — do not grep or scan.
 
-- Base / EVM wallet (the primary wallet shown in Franklin's startup banner):
-  Private key file: ~/.blockrun/.session
-  Format: 66-char hex string starting with 0x (file name intentionally looks like a session token for obscurity)
-  Address: derivable from the key; also available via getWalletAddress() from @blockrun/llm
 - Solana wallet:
   Private key file: ~/.blockrun/.solana-session
   Format: bare base58 secret key (file name mirrors the Base wallet's obscurity convention; mode 600)
   Address: derivable; available via getOrCreateSolanaWallet() from @blockrun/llm
+- Base / EVM wallet:
+  Private key file: ~/.blockrun/.session
+  Format: 66-char hex string starting with 0x (file name intentionally looks like a session token for obscurity)
+  Address: derivable from the key; also available via getWalletAddress() from @blockrun/llm
 - Chain selection: ~/.blockrun/payment-chain ("base" or "solana"). Legacy file ~/.blockrun/.chain may also exist on installs that haven't migrated; canonical is payment-chain.
 - Spending data:
   - ~/.blockrun/franklin-stats.json — rolling totals + per-model breakdown (what \`franklin stats\` reads).
@@ -200,7 +203,7 @@ Franklin Trading stores wallet keys in ~/.blockrun/. When the user asks about wa
   - Use \`franklin stats\` / \`franklin content list\` instead of parsing files when the user asks "how much did I spend".
 - Programmatic access: import { getWalletAddress, getOrCreateWallet, getOrCreateSolanaWallet } from '@blockrun/llm'
 
-When the user asks about "my wallet" without qualifier, default to Base (it's the primary chain shown at launch). Only mention Solana if the chain file says solana or the user explicitly asks.
+When the user asks about "my wallet", use the saved active chain. New users default to Solana; preserve existing Base selections.
 
 ## Funding the wallet ("how do I deposit / recharge / fund / top up", in any language)
 
@@ -221,8 +224,8 @@ function getBlockRunApiSection(): string {
 You run on the BlockRun AI Gateway. When the user asks you to "test the BlockRun API", "check all endpoints", or call the gateway directly, use ONLY the paths below. **Never invent, pluralize, or singularize an endpoint** — \`/v1/image/generate\` (singular) is wrong, \`/v1/images/generations\` (plural) is correct. If a path you have in mind isn't in this list, fetch the canonical discovery endpoints before calling it.
 
 **Base URLs**
-- Base chain: \`https://blockrun.ai/api\` (alias: \`https://api.blockrun.ai\`)
 - Solana chain: \`https://sol.blockrun.ai/api\`
+- Base chain: \`https://blockrun.ai/api\` (alias: \`https://api.blockrun.ai\`)
 
 **Discovery (always free, GET) — fetch these BEFORE guessing a path**
 - \`GET /openapi.json\` (or \`/.well-known/openapi.json\`) — full OpenAPI 3.1 contract, every route + request schema
