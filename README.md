@@ -2,11 +2,11 @@
 
 # Franklin Trading
 
-**The AI trading agent with a wallet.**
+**The AI trading agent with account API and wallet support.**
 
-Researches, debates, paper-trades against real prices, and settles every paid call in USDC.
+Researches, debates, and paper-trades against real prices with account API or x402 billing.
 Risk limits live in code, not in the prompt. Every fill has a receipt.
-Fund the wallet. Set a budget. Walk away — and come back to a book.
+Set a budget. Connect a transaction wallet for live trades. Walk away — and come back to a book.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
@@ -17,7 +17,7 @@ Fund the wallet. Set a budget. Walk away — and come back to a book.
 
 > Franklin Trading is a fork of [Franklin](https://github.com/BlockRunAI/Franklin) — the
 > general-purpose Autonomous Economic Agent — specialized as a wallet-native trading
-> agent. It inherits Franklin's economic substrate (x402 micropayments, USDC settlement,
+> agent. It inherits Franklin's economic substrate (account API access, x402 micropayments,
 > the shared [Router Core](https://github.com/BlockRunAI/router-core) engine across
 > <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> models, removable-by-design harness components)
 > and adds a deterministic fee-aware risk engine, a wallet-bound trade journal, a
@@ -26,11 +26,11 @@ Fund the wallet. Set a budget. Walk away — and come back to a book.
 ## What works today
 
 This section is the honest one. Everything in it ships in `@blockrun/franklin-trading` 0.3.0
-and is covered by the local test suite (386 tests, no network).
+and is covered by the local test suite (392 tests, no network).
 
 | Capability | Status | Where |
 |---|---|---|
-| USDC wallet on Base or Solana, x402 pay-per-call to every model and paid API | ✅ shipped | `src/wallet/`, `@blockrun/llm` |
+| Account API key or USDC wallet on Solana / Base for every model and paid API | ✅ shipped | `src/payments/`, `src/wallet/`, `@blockrun/llm` |
 | Auto model routing on the shared Router Core engine, <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> models, dead-model kill-switch | ✅ shipped | `src/router/` |
 | Paper trading against **live** CoinGecko marks (real P&L, simulated fills) | ✅ shipped | `src/trading/live-exchange.ts` |
 | Deterministic risk engine: cash **including exchange fee**, per-position cap, total exposure cap, sell integrity | ✅ shipped | `src/trading/risk.ts` |
@@ -58,6 +58,30 @@ Franklin Trading is **the synthesis**: Vibe-Trading-style natural-language resea
 persistent memory, TradingAgents-style hierarchical persona debate, Hummingbot-style
 execution rigor — wrapped in Franklin's wallet-native economic substrate, with the one
 thing none of them do: **the money is real from day one**, so the guardrails had to be too.
+
+## Account API key
+
+Register at [user.blockrun.ai](https://user.blockrun.ai), create an
+[API key](https://user.blockrun.ai/dashboard/keys), and add
+[credits](https://user.blockrun.ai/dashboard/credits).
+
+```bash
+export BLOCKRUN_API_KEY="brk_live_..."
+franklin-trading
+```
+
+The account endpoint defaults to `https://api.blockrun.ai`; set
+`BLOCKRUN_API_BASE_URL` only when using another trusted BlockRun deployment.
+API mode covers the agent, subagents, local proxy, model catalog, Exa,
+prediction markets, DeFiLlama, RPC and BlockRun market data. A 401 points to
+the key dashboard; a 402 points to account credit top-up. Franklin Trading
+does not fall back to a wallet payment after either response.
+
+The API key pays for BlockRun services. It cannot sign an exchange order or
+an on-chain transaction. Paper trading needs no transaction wallet; live
+trading still requires a separate Solana or Base wallet. `setup`, `balance`
+and the Wallet tool continue to manage and report that transaction wallet.
+Never put either credential in source control.
 
 ## Risk lives outside the model
 
@@ -93,20 +117,30 @@ validated on load (an `Infinity` balance would otherwise disarm every cap).
 ```bash
 npm install -g @blockrun/franklin-trading
 
-# 1. Run — free out of the box (nvidia/nemotron-nano-9b-v2, no wallet needed)
+# Option A: use account credits for models, research and market data
+export BLOCKRUN_API_KEY="brk_live_..."
 franklin-trading
 
-# 2. Create a USDC wallet on Base (or solana) to unlock every paid model + API
-franklin-trading setup base
+# Add a separate transaction wallet only when you are ready for live trades.
+# Solana is the default; Base remains available explicitly.
+franklin-trading setup solana
+# franklin-trading setup base
 
-# 3. Fund it with $5+ USDC — print the address with:
+# Option B: unset the key and use x402 wallet billing for BlockRun calls
+unset BLOCKRUN_API_KEY
+franklin-trading setup solana
+
+# Print the active transaction wallet and its USDC balance
 franklin-trading balance
 
-# 4. Start with a budget — Franklin Trading stops when the cap is hit
+# Franklin Trading stops when the local session estimate reaches the cap
 franklin-trading --max-spend 5
 ```
 
-Zero signup, zero API keys, zero card. The wallet is the identity.
+Account API usage is recorded in the
+[account dashboard](https://user.blockrun.ai/dashboard). In API mode, local
+cost totals and `--max-spend` are estimates; the dashboard ledger is
+authoritative. Unset `BLOCKRUN_API_KEY` to return to x402 wallet billing.
 
 ## A 60-second tour
 
@@ -206,7 +240,7 @@ call in USDC. No free alias ever falls back to a paid model.
                               │
    Execution: LiveExchange (paper, live marks) today · Hyperliquid · Jupiter · 0x · Polymarket (M4–M5)
                               │
-   Economic substrate (inherited): USDC wallet on Base + Solana, x402 micropayments
+   Economic substrate: account API · x402 USDC on Solana + Base · separate trade signing
 ```
 
 See [`PHILOSOPHY.md`](PHILOSOPHY.md) for the design principles,
@@ -324,8 +358,8 @@ franklin-trading run btc-funding-basis --mode live       # real on-chain orders
 ```bash
 npm install
 npm run build        # tsc + copy bundled skills
-npm test             # 386 local tests, no network, no wallet
-npm run test:e2e     # hits real models — needs a funded wallet
+npm test             # local tests, no network or funded wallet
+npm run test:e2e     # real models — needs BLOCKRUN_API_KEY or a funded x402 wallet
 ```
 
 Upstream sync: model catalog, router and pricing changes land in

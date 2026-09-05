@@ -1,8 +1,14 @@
+import { accountMode, ACCOUNT_PORTAL, validateAccountConfig } from '../payments/account.js';
 import chalk from 'chalk';
 import { setupAgentWallet, setupAgentSolanaWallet } from '@blockrun/llm';
 import { loadChain } from '../config.js';
 
 export async function balanceCommand() {
+  if (accountMode()) {
+    validateAccountConfig();
+    console.log(`Account API credits and usage: ${ACCOUNT_PORTAL}/dashboard`);
+    console.log(chalk.dim('Transaction wallet:'));
+  }
   const chain = loadChain();
 
   try {
@@ -12,7 +18,7 @@ export async function balanceCommand() {
       const balance = await client.getBalance();
 
       console.log(`Chain:  ${chalk.magenta('solana')}`);
-      console.log(`Wallet: ${chalk.cyan(address)}`);
+      console.log(`Transaction Wallet: ${chalk.cyan(address)}`);
       console.log(
         `USDC Balance: ${chalk.green(`$${balance.toFixed(2)}`)}`
       );
@@ -28,7 +34,7 @@ export async function balanceCommand() {
       const balance = await client.getBalance();
 
       console.log(`Chain:  ${chalk.magenta('base')}`);
-      console.log(`Wallet: ${chalk.cyan(address)}`);
+      console.log(`Transaction Wallet: ${chalk.cyan(address)}`);
       console.log(
         `USDC Balance: ${chalk.green(`$${balance.toFixed(2)}`)}`
       );
@@ -42,7 +48,7 @@ export async function balanceCommand() {
   } catch (err) {
     const msg = err instanceof Error ? err.message : '';
     if (msg.includes('ENOENT') || msg.includes('wallet') || msg.includes('key')) {
-      console.log(chalk.red('No wallet found. Run `franklin setup` first.'));
+      console.log(chalk.red('No transaction wallet found. Run `franklin-trading setup` before live trading.'));
     } else {
       console.log(chalk.red(`Error checking balance: ${msg || 'unknown error'}`));
     }

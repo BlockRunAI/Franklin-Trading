@@ -1,3 +1,4 @@
+import { gatewayFetch as fetch, accountMode } from '../payments/account.js';
 /**
  * Proactive prefetch for live-world questions.
  *
@@ -175,7 +176,7 @@ async function exaAnswerTry(query: string, client: ModelClient): Promise<string 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),
     });
-    if (res.status === 402) {
+    if (res.status === 402 && !accountMode()) {
       const payHdr = await extractPaymentReq(res);
       if (!payHdr) return null;
       const { getOrCreateWallet, getOrCreateSolanaWallet, createPaymentPayload, createSolanaPaymentPayload,
@@ -216,12 +217,12 @@ async function exaAnswerTry(query: string, client: ModelClient): Promise<string 
         method: 'POST', headers, body: JSON.stringify({ query }),
       });
       if (!res2.ok) return null;
-      const body = await res2.json() as { data?: { answer?: string } };
-      return (body.data?.answer || '').slice(0, 600).trim() || null;
+      const body = await res2.json() as { answer?: string; data?: { answer?: string } };
+      return (body.data?.answer || body.answer || '').slice(0, 600).trim() || null;
     }
     if (!res.ok) return null;
-    const body = await res.json() as { data?: { answer?: string } };
-    return (body.data?.answer || '').slice(0, 600).trim() || null;
+    const body = await res.json() as { answer?: string; data?: { answer?: string } };
+    return (body.data?.answer || body.answer || '').slice(0, 600).trim() || null;
   } catch {
     return null;
   }

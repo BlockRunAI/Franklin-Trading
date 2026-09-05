@@ -1,3 +1,4 @@
+import { accountMode, ACCOUNT_PORTAL } from '../payments/account.js';
 /**
  * Wallet capability — direct read of Franklin's wallet status.
  *
@@ -33,24 +34,27 @@ export function formatWalletReport(input: WalletReportInput): string {
 
 async function execute(): Promise<CapabilityResult> {
   const chain = loadChain();
+  const accountLine = accountMode()
+    ? `Account API billing: ${ACCOUNT_PORTAL}/dashboard\nTransaction wallet (required for on-chain trades):\n`
+    : '';
   try {
     if (chain === 'solana') {
       const { setupAgentSolanaWallet } = await import('@blockrun/llm');
       const c = await setupAgentSolanaWallet({ silent: true });
       const address = await c.getWalletAddress();
       const balance = await c.getBalance();
-      return { output: formatWalletReport({ chain, address, balanceUsd: balance }) };
+      return { output: accountLine + formatWalletReport({ chain, address, balanceUsd: balance }) };
     }
     const { setupAgentWallet } = await import('@blockrun/llm');
     const c = setupAgentWallet({ silent: true });
     const address = c.getWalletAddress();
     const balance = await c.getBalance();
-    return { output: formatWalletReport({ chain, address, balanceUsd: balance }) };
+    return { output: accountLine + formatWalletReport({ chain, address, balanceUsd: balance }) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
       output:
-        `Wallet read failed (${msg}). The user may not have run \`franklin setup\` yet, ` +
+        `${accountLine}Wallet read failed (${msg}). The user may not have run \`franklin-trading setup\` yet, ` +
         `or the chain RPC is temporarily unreachable. Surface this to the user as-is.`,
       isError: true,
     };
@@ -61,7 +65,7 @@ export const walletCapability: CapabilityHandler = {
   spec: {
     name: 'Wallet',
     description:
-      'Read Franklin\'s wallet status — chain, address, and USDC balance. ' +
+      'Read Franklin Trading\'s transaction wallet status — chain, address, and USDC balance. ' +
       'Use this for any "what\'s my balance / how much money / wallet status" question. ' +
       'Cheaper and more direct than running `franklin balance` via Bash, and never costs USDC.',
     input_schema: {

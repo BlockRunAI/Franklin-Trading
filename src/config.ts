@@ -20,8 +20,8 @@ export const BLOCKRUN_DIR = path.join(os.homedir(), '.blockrun');
 export const CHAIN_FILE = path.join(BLOCKRUN_DIR, 'payment-chain');
 
 export const API_URLS: Record<Chain, string> = {
-  base: 'https://blockrun.ai/api',
   solana: 'https://sol.blockrun.ai/api',
+  base: 'https://blockrun.ai/api',
 };
 
 export const DEFAULT_PROXY_PORT = 8402;

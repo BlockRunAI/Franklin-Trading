@@ -1,3 +1,4 @@
+import { accountMode, ACCOUNT_PORTAL } from '../payments/account.js';
 /**
  * Slash command registry for Franklin.
  * Extracted from loop.ts for maintainability.
@@ -933,6 +934,7 @@ export async function handleSlashCommand(
         } catch { balance = '(unavailable)'; }
       }
       ctx.onEvent({ kind: 'text_delta', text:
+        (accountMode() ? `Account API billing: ${ACCOUNT_PORTAL}/dashboard\nTransaction wallet:\n` : '') +
         `**Wallet**\n` +
         `  Chain:   ${chain}\n` +
         `  Address: ${address}\n` +
