@@ -19,7 +19,7 @@ Set a budget. Connect a transaction wallet for live trades. Walk away — and co
 > general-purpose Autonomous Economic Agent — specialized as a wallet-native trading
 > agent. It inherits Franklin's economic substrate (account API access, x402 micropayments,
 > the shared [Router Core](https://github.com/BlockRunAI/router-core) engine across
-> <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> models, removable-by-design harness components)
+> <!-- br:models.chatVisible -->78<!-- /br:models.chatVisible --> models, removable-by-design harness components)
 > and adds a deterministic fee-aware risk engine, a wallet-bound trade journal, a
 > multi-role persona debate, and a Backtest → Paper → Live strategy lifecycle.
 
@@ -31,7 +31,7 @@ and is covered by the local test suite (392 tests, no network).
 | Capability | Status | Where |
 |---|---|---|
 | Account API key or USDC wallet on Solana / Base for every model and paid API | ✅ shipped | `src/payments/`, `src/wallet/`, `@blockrun/llm` |
-| Auto model routing on the shared Router Core engine, <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> models, dead-model kill-switch | ✅ shipped | `src/router/` |
+| Auto model routing on the shared Router Core engine, <!-- br:models.chatVisible -->78<!-- /br:models.chatVisible --> models, dead-model kill-switch | ✅ shipped | `src/router/` |
 | Paper trading against **live** CoinGecko marks (real P&L, simulated fills) | ✅ shipped | `src/trading/live-exchange.ts` |
 | Deterministic risk engine: cash **including exchange fee**, per-position cap, total exposure cap, sell integrity | ✅ shipped | `src/trading/risk.ts` |
 | Record-then-flag execution: a fill the venue executed is always booked; deviations are warnings, never silent drops | ✅ shipped | `src/trading/engine.ts` |
@@ -214,7 +214,7 @@ Pin one with `/model <shortcut>` when you want to:
 | | `omni` | Nemotron 3 Nano Omni (text + image + audio) | $0 |
 | | `nano-vl` | Nemotron Nano VL | $0 |
 
-The full catalog — <!-- br:models.totalVisible -->100<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
+The full catalog — <!-- br:models.totalVisible -->102<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
 [blockrun.ai/models](https://blockrun.ai/models). Pricing is provider cost + 5%, settled per
 call in USDC. No free alias ever falls back to a paid model.
 
