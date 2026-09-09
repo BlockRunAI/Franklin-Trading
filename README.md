@@ -214,7 +214,7 @@ Pin one with `/model <shortcut>` when you want to:
 | | `omni` | Nemotron 3 Nano Omni (text + image + audio) | $0 |
 | | `nano-vl` | Nemotron Nano VL | $0 |
 
-The full catalog — <!-- br:models.totalVisible -->102<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
+The full catalog — <!-- br:models.totalVisible -->103<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
 [blockrun.ai/models](https://blockrun.ai/models). Pricing is provider cost + 5%, settled per
 call in USDC. No free alias ever falls back to a paid model.
 
