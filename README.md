@@ -230,7 +230,7 @@ call in USDC. No free alias ever falls back to a paid model.
             ┌─────────────┬───┴──────┬──────────────┐
        Router Core     Brain +     Session +    Trading harness
        (shared,      Learnings +   Cost +       layers (M3: 4 moats)
-        72 models)   Shadow Acct   JSONL
+        82 models)   Shadow Acct   JSONL
                               │
    TradingEngine: local risk → fee quote → fee-aware risk → place → record-then-flag
                               │
