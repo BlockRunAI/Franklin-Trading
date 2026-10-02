@@ -157,7 +157,7 @@ _Avoid_: Bridge, adapter.
 
 ## Example dialogue
 
-> **Reviewer:** "Why is `franklin-trading --model gpt-oss` silently routing to `nvidia/nemotron-nano-9b-v2`?"
+> **Reviewer:** "Why is `franklin-trading --model gpt-oss` silently routing to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`?"
 > **Author:** "It's a backward-compat **picker shortcut** — the canonical model behind `gpt-oss` was retired by the gateway, so we point the alias at a member of the **free tier matrix** so muscle memory keeps working without falling back to a paid model."
 >
 > **Reviewer:** "Then a 402 came back on the auto-routed turn and we still kept going?"

@@ -289,18 +289,18 @@ test('proxy server handles OPTIONS and local model switching without backend cal
     );
 
     const freeSwitches = {
-      free: 'nvidia/nemotron-nano-9b-v2',
-      glm4: 'nvidia/nemotron-nano-9b-v2',
-      'qwen-think': 'nvidia/nemotron-nano-9b-v2',
-      'qwen-coder': 'nvidia/nemotron-nano-9b-v2',
-      maverick: 'nvidia/nemotron-nano-9b-v2',
-      'deepseek-free': 'nvidia/nemotron-nano-9b-v2',
-      'gpt-oss': 'nvidia/nemotron-nano-9b-v2',
-      'gpt-oss-small': 'nvidia/nemotron-nano-9b-v2',
-      'mistral-small': 'nvidia/mistral-nemotron',
-      nemotron: 'nvidia/mistral-nemotron',
-      devstral: 'nvidia/nemotron-nano-9b-v2',
-      'nano-9b': 'nvidia/nemotron-nano-9b-v2',
+      free: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      glm4: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'qwen-think': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'qwen-coder': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      maverick: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'deepseek-free': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'gpt-oss': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'gpt-oss-small': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'mistral-small': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      nemotron: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      devstral: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'nano-9b': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
     };
     for (const [shortcut, expectedModel] of Object.entries(freeSwitches)) {
       const freeSwitchRes = await fetch(`http://127.0.0.1:${port}/api/messages`, {
@@ -5328,34 +5328,47 @@ test('free model catalog: picker, shortcuts, pricing, and weak-model guard stay 
     assert.equal(isWeakModel(entry.id), true, `${entry.id} should receive weak/free-model guardrails`);
   }
 
-  // Refreshed 2026-08-12: `free` + most legacy free aliases now resolve to the
-  // current free default (mistral-nemotron — qwen3-next hit NVIDIA's EOL).
-  // Every target is a $0 nvidia model — the final estimateCost assertion
-  // enforces free-only.
+  // Refreshed 2026-10-02: `free` + every retired free alias resolve to the
+  // free default (Nemotron 3 Nano Omni — same as Franklin); nano-9b-v2,
+  // nano-12b-v2-vl and mistral-nemotron left /v1/models.
+  // Every target is a $0 model — the final estimateCost assertion enforces
+  // free-only.
   const freeAliases = {
-    free: 'nvidia/nemotron-nano-9b-v2',
-    qwen: 'nvidia/nemotron-nano-9b-v2',
-    qwen3: 'nvidia/nemotron-nano-9b-v2',
-    glm4: 'nvidia/nemotron-nano-9b-v2',
-    'qwen-think': 'nvidia/nemotron-nano-9b-v2',
-    'qwen-coder': 'nvidia/nemotron-nano-9b-v2',
-    'deepseek-free': 'nvidia/nemotron-nano-9b-v2',
-    'gpt-oss': 'nvidia/nemotron-nano-9b-v2',
-    'gpt-oss-small': 'nvidia/nemotron-nano-9b-v2',
-    'mistral-small': 'nvidia/mistral-nemotron',
-    nemotron: 'nvidia/mistral-nemotron',
-    devstral: 'nvidia/nemotron-nano-9b-v2',
-    maverick: 'nvidia/nemotron-nano-9b-v2',
-    llama: 'nvidia/nemotron-nano-9b-v2',
-    'nano-9b': 'nvidia/nemotron-nano-9b-v2',
-    'nano-vl': 'nvidia/nemotron-nano-12b-v2-vl',
-    'free-vision': 'nvidia/nemotron-nano-12b-v2-vl',
+    free: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    qwen: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    qwen3: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    glm4: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'qwen-think': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'qwen-coder': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'deepseek-free': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'gpt-oss': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'gpt-oss-small': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'mistral-small': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    nemotron: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    devstral: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    maverick: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    llama: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'nano-9b': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'nano-vl': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'free-vision': 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    omni: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'ultra-550b': 'nvidia/nemotron-3-ultra-550b',
+    laguna: 'poolside/laguna-xs-2.1',
   };
 
   for (const [shortcut, expectedModel] of Object.entries(freeAliases)) {
     assert.equal(MODEL_SHORTCUTS[shortcut], expectedModel, `MODEL_SHORTCUTS.${shortcut} drifted`);
     assert.equal(resolveModel(shortcut), expectedModel, `resolveModel(${shortcut}) drifted`);
     assert.equal(estimateCost(expectedModel, 100_000, 100_000), 0, `${shortcut} resolves to a non-free model`);
+  }
+
+  // Ids gone from /v1/models must not be a shortcut target or a picker row.
+  const retiredFree = ['nvidia/nemotron-nano-9b-v2', 'nvidia/nemotron-nano-12b-v2-vl', 'nvidia/mistral-nemotron'];
+  for (const [shortcut, id] of Object.entries(MODEL_SHORTCUTS)) {
+    assert.ok(!retiredFree.includes(id), `MODEL_SHORTCUTS.${shortcut} still targets retired ${id}`);
+  }
+  for (const entry of freeCategory.models) {
+    assert.ok(!retiredFree.includes(entry.id), `picker still lists retired ${entry.id}`);
   }
 });
 
