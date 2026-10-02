@@ -195,10 +195,10 @@ Pin one with `/model <shortcut>` when you want to:
 | Frontier | `opus` | Claude Opus 5 | $5 / $25 |
 | | `fable` | Claude Fable 5 | $10 / $50 |
 | | `sonnet` | Claude Sonnet 5 | $3 / $15 |
-| | `gpt` | GPT-5.6 Sol | $5 / $30 |
+| | `gpt` | GPT-5.6 Sol | $4 / $20 |
 | | `qwen-max` | Qwen3.7 Max | $1.475 / $4.425 |
 | | `gemini` | Gemini 3.1 Pro | $2 / $12 |
-| | `grok` | Grok 4.5 | $2.5 / $9 |
+| | `grok` | Grok 4.5 | $2 / $6 |
 | | `kimi` | Kimi K3 | $3 / $15 |
 | Reasoning | `o3` | O3 | $2 / $8 |
 | | `codex` | GPT-5.3 Codex | $1.75 / $14 |
@@ -213,6 +213,11 @@ Pin one with `/model <shortcut>` when you want to:
 | Free | `free` | Nemotron Nano 9B | $0 |
 | | `omni` | Nemotron 3 Nano Omni (text + image + audio) | $0 |
 | | `nano-vl` | Nemotron Nano VL | $0 |
+
+The newest gateway models are pinned by explicit version shortcut rather than
+a table row: `opus-5.5`, `sonnet-5.5`, `fable-5.1`, `gpt-6-astra`, `gpt-6-sol`,
+`gpt-6-luna`, `gpt-5.1`, `grok-4.7` and `grok-4.6` (or any full id, e.g.
+`/model anthropic/claude-opus-5.5`). Live prices: [blockrun.ai/pricing](https://blockrun.ai/pricing).
 
 The full catalog — <!-- br:models.totalVisible -->109<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
 [blockrun.ai/models](https://blockrun.ai/models). Pricing is provider cost + 5%, settled per
