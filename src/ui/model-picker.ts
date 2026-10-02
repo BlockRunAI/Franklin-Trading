@@ -29,6 +29,11 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   'sonnet-4.5': 'anthropic/claude-sonnet-4.5',
   opus: 'anthropic/claude-opus-5',
   'opus-5': 'anthropic/claude-opus-5',
+  // 2026-10 additions — explicit version pins only. The bare `opus` /
+  // `sonnet` / `fable` / `claude` aliases above are deliberately NOT moved.
+  'opus-5.5': 'anthropic/claude-opus-5.5',
+  'sonnet-5.5': 'anthropic/claude-sonnet-5.5',
+  'fable-5.1': 'anthropic/claude-fable-5.1',
   'opus-4.8': 'anthropic/claude-opus-4.8',
   'opus-4.7': 'anthropic/claude-opus-4.7',
   // Hidden from /v1/models since 2026-08, still served (probed 2026-08-29).
@@ -42,11 +47,16 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   gpt5: 'openai/gpt-5.6-sol',
   'gpt-5': 'openai/gpt-5.6-sol',
   'gpt-5.6': 'openai/gpt-5.6-sol',
+  // GPT-6 family + GPT-5.1 (2026-10) — explicit pins; `gpt` is NOT moved.
+  'gpt-6-astra': 'openai/gpt-6-astra',
+  'gpt-6-sol': 'openai/gpt-6-sol',
+  'gpt-6-luna': 'openai/gpt-6-luna',
+  'gpt-5.1': 'openai/gpt-5.1',
   'gpt-5.6-sol': 'openai/gpt-5.6-sol',
   'gpt-5.6-terra': 'openai/gpt-5.6-terra',
   'gpt-5.6-luna': 'openai/gpt-5.6-luna',
   // GPT-5.6 pro reasoning tier (gateway, 2026-08). Same base models with pro
-  // reasoning mode on: Sol Pro matches Sol at $5/$30, while Terra Pro ($1/$6)
+  // reasoning mode on: Sol Pro matches Sol at $4/$20, while Terra Pro ($1/$6)
   // and Luna Pro ($0.1/$0.6) come in UNDER their own base tiers — so the pro
   // ids are the better pick for anything reasoning-shaped. `gpt` stays pinned
   // to Sol: bare aliases track the gateway's flagship, not the cheapest
@@ -120,6 +130,9 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   // hidden on the gateway; explicit IDs still resolve.)
   grok: 'xai/grok-4.5',
   'grok-4.5': 'xai/grok-4.5',
+  // Grok 4.7 / 4.6 (2026-10) — explicit pins; `grok` is NOT moved.
+  'grok-4.7': 'xai/grok-4.7',
+  'grok-4.6': 'xai/grok-4.6',
   'grok-4.3': 'xai/grok-4.3',
   'grok-build': 'xai/grok-build-0.1',
   // grok-3 / grok-4-0709 / the grok-4-1-fast pair are hidden from
@@ -391,7 +404,7 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
       { id: 'anthropic/claude-opus-5',     shortcut: 'opus',      label: 'Claude Opus 5',     price: '$5/$25', highlight: true },
       { id: 'anthropic/claude-sonnet-5',   shortcut: 'sonnet',    label: 'Claude Sonnet 5',   price: '$3/$15' },
       { id: 'qwen/qwen3.7-max',            shortcut: 'qwen-max',  label: 'Qwen3.7 Max',       price: '$1.475/$4.425', highlight: true },
-      { id: 'openai/gpt-5.6-sol',          shortcut: 'gpt',       label: 'GPT-5.6 Sol',       price: '$5/$30', highlight: true },
+      { id: 'openai/gpt-5.6-sol',          shortcut: 'gpt',       label: 'GPT-5.6 Sol',       price: '$4/$20', highlight: true },
       // Gemini 2.5 Pro's row retired here the same way Opus 4.8's did: a
       // superseded sibling listed directly under its successor is choice
       // paralysis, not choice. `gemini-2.5` still resolves to it.
