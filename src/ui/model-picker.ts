@@ -56,9 +56,9 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   'gpt-5.6-terra': 'openai/gpt-5.6-terra',
   'gpt-5.6-luna': 'openai/gpt-5.6-luna',
   // GPT-5.6 pro reasoning tier (gateway, 2026-08). Same base models with pro
-  // reasoning mode on: Sol Pro matches Sol at $4/$20, while Terra Pro ($1/$6)
-  // and Luna Pro ($0.1/$0.6) come in UNDER their own base tiers — so the pro
-  // ids are the better pick for anything reasoning-shaped. `gpt` stays pinned
+  // reasoning mode on, each at its base tier's price (Sol Pro $4/$20, Terra
+  // Pro $2/$12, Luna Pro $0.2/$1.2 — live 2026-10-02) — so the pro ids are the
+  // better pick for anything reasoning-shaped. `gpt` stays pinned
   // to Sol: bare aliases track the gateway's flagship, not the cheapest
   // sibling.
   'gpt-5.6-sol-pro': 'openai/gpt-5.6-sol-pro',
@@ -147,7 +147,7 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   // Flash modes upstream); free tier routes through nvidia/*.
   deepseek: 'deepseek/deepseek-chat',     // V4 Flash Chat (paid, $0.20/$0.40)
   r1: 'deepseek/deepseek-reasoner',       // V4 Flash Reasoner (paid)
-  // V4 Pro: paid flagship, 1.6T MoE / 49B active, 1M ctx, 75% launch promo.
+  // V4 Pro: paid flagship, 1.6T MoE / 49B active, 1M ctx, $1.32/$3.96 (live 2026-10-02).
   'deepseek-v4-pro': 'deepseek/deepseek-v4-pro',
   'dsv4-pro': 'deepseek/deepseek-v4-pro',
   'v4-pro': 'deepseek/deepseek-v4-pro',
@@ -382,7 +382,7 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
       // Premium are kept as shortcut aliases (`eco`, `premium`) and resolve
       // through the router for back-compat with older configs/sessions, but
       // they're hidden from new users — Auto already covers the cheap end
-      // (V4 Pro at $0.435/$0.87 for SIMPLE/MEDIUM) and the quality end (Opus
+      // (V4 Pro at $1.32/$3.96 for SIMPLE/MEDIUM) and the quality end (Opus
       // for COMPLEX), so a separate Eco/Premium picker entry just adds
       // choice paralysis without distinct value.
       { id: 'blockrun/auto', shortcut: 'auto', label: 'Auto', price: 'routed' },
@@ -402,7 +402,7 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
       // list (its `opus-4.8` shortcut stays live) rather than sitting next to a
       // strictly-better entry at an identical price.
       { id: 'anthropic/claude-opus-5',     shortcut: 'opus',      label: 'Claude Opus 5',     price: '$5/$25', highlight: true },
-      { id: 'anthropic/claude-sonnet-5',   shortcut: 'sonnet',    label: 'Claude Sonnet 5',   price: '$3/$15' },
+      { id: 'anthropic/claude-sonnet-5',   shortcut: 'sonnet',    label: 'Claude Sonnet 5',   price: '$2/$10' },
       { id: 'qwen/qwen3.7-max',            shortcut: 'qwen-max',  label: 'Qwen3.7 Max',       price: '$1.475/$4.425', highlight: true },
       { id: 'openai/gpt-5.6-sol',          shortcut: 'gpt',       label: 'GPT-5.6 Sol',       price: '$4/$20', highlight: true },
       // Gemini 2.5 Pro's row retired here the same way Opus 4.8's did: a
@@ -420,16 +420,15 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
     models: [
       { id: 'openai/o3',                     shortcut: 'o3',           label: 'O3',                    price: '$2/$8' },
       { id: 'openai/gpt-5.3-codex',          shortcut: 'codex',        label: 'GPT-5.3 Codex',         price: '$1.75/$14' },
-      // V4 Pro: the 75% launch promo became DeepSeek's permanent list price
-      // after 2026-05-31. 1M context, 1.6T MoE → punches up to GPT-5.5/Opus
-      // on hard tasks at <1/10 the price.
-      { id: 'deepseek/deepseek-v4-pro',      shortcut: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro',    price: '$0.435/$0.87', highlight: true },
-      { id: 'deepseek/deepseek-reasoner',    shortcut: 'r1',           label: 'DeepSeek V4 Flash R.',  price: '$0.2/$0.4' },
+      // V4 Pro: $1.32/$3.96 list (live 2026-10-02). 1M context, 1.6T MoE →
+      // punches up to GPT-5.5/Opus on hard tasks at a fraction of the price.
+      { id: 'deepseek/deepseek-v4-pro',      shortcut: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro',    price: '$1.32/$3.96', highlight: true },
+      { id: 'deepseek/deepseek-reasoner',    shortcut: 'r1',           label: 'DeepSeek V4 Flash R.',  price: '$0.14/$0.28' },
       // Terra Pro took the row grok-4-1-fast-reasoning used to hold: the xAI
       // fast family is hidden from /v1/models, so reconcilePicker dropped that
       // row on every live render anyway (`grok-fast` still resolves). Terra
-      // Pro is GPT-5.6 Terra with pro reasoning on, at HALF Terra's price.
-      { id: 'openai/gpt-5.6-terra-pro',      shortcut: 'terra-pro',    label: 'GPT-5.6 Terra Pro',     price: '$1/$6', highlight: true },
+      // Pro is GPT-5.6 Terra with pro reasoning on, at Terra's own price.
+      { id: 'openai/gpt-5.6-terra-pro',      shortcut: 'terra-pro',    label: 'GPT-5.6 Terra Pro',     price: '$2/$12', highlight: true },
       // GLM-5.3: Z.AI's flagship — 1M context, always-on reasoning, strong on
       // long-horizon coding. `glm`/`glm5` shortcuts pin it.
       { id: 'zai/glm-5.3',                   shortcut: 'glm-5.3',      label: 'GLM-5.3',               price: '$1.4/$4.4' },

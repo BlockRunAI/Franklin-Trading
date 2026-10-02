@@ -194,7 +194,7 @@ Pin one with `/model <shortcut>` when you want to:
 |---|---|---|---|
 | Frontier | `opus` | Claude Opus 5 | $5 / $25 |
 | | `fable` | Claude Fable 5 | $10 / $50 |
-| | `sonnet` | Claude Sonnet 5 | $3 / $15 |
+| | `sonnet` | Claude Sonnet 5 | $2 / $10 |
 | | `gpt` | GPT-5.6 Sol | $4 / $20 |
 | | `qwen-max` | Qwen3.7 Max | $1.475 / $4.425 |
 | | `gemini` | Gemini 3.1 Pro | $2 / $12 |
@@ -202,17 +202,15 @@ Pin one with `/model <shortcut>` when you want to:
 | | `kimi` | Kimi K3 | $3 / $15 |
 | Reasoning | `o3` | O3 | $2 / $8 |
 | | `codex` | GPT-5.3 Codex | $1.75 / $14 |
-| | `deepseek-v4-pro` | DeepSeek V4 Pro | $0.435 / $0.87 |
-| | `terra-pro` | GPT-5.6 Terra Pro | $1 / $6 |
+| | `deepseek-v4-pro` | DeepSeek V4 Pro | $1.32 / $3.96 |
+| | `terra-pro` | GPT-5.6 Terra Pro | $2 / $12 |
 | | `glm-5.3` | GLM-5.3 | $1.4 / $4.4 |
 | Budget | `haiku` | Claude Haiku 4.5 | $1 / $5 |
 | | `mini` | GPT-5 Mini | $0.25 / $2 |
 | | `glm-flash` | GLM-5.3 Flash (1M ctx, vision) | $0.15 / $0.5 |
 | | `deepseek` | DeepSeek V4 Flash | $0.14 / $0.28 |
 | | `qwen-flash` | Qwen3.7 Flash (1M ctx) | $0.03 / $0.13 |
-| Free | `free` | Nemotron Nano 9B | $0 |
-| | `omni` | Nemotron 3 Nano Omni (text + image + audio) | $0 |
-| | `nano-vl` | Nemotron Nano VL | $0 |
+| Free | `omni` | Nemotron 3 Nano Omni (text + image + audio) | $0 |
 
 The newest gateway models are pinned by explicit version shortcut rather than
 a table row: `opus-5.5`, `sonnet-5.5`, `fable-5.1`, `gpt-6-astra`, `gpt-6-sol`,
@@ -220,8 +218,8 @@ a table row: `opus-5.5`, `sonnet-5.5`, `fable-5.1`, `gpt-6-astra`, `gpt-6-sol`,
 `/model anthropic/claude-opus-5.5`). Live prices: [blockrun.ai/pricing](https://blockrun.ai/pricing).
 
 The full catalog — <!-- br:models.totalVisible -->109<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
-[blockrun.ai/models](https://blockrun.ai/models). Pricing is provider cost + 5%, settled per
-call in USDC. No free alias ever falls back to a paid model.
+[blockrun.ai/models](https://blockrun.ai/models). Chat is provider cost with no markup, plus
+$0.001 per call; media carries 5%. Settled per call in USDC. No free alias ever falls back to a paid model.
 
 ## Architecture
 

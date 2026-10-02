@@ -355,7 +355,7 @@ export async function analyzeMediaRequest(opts: AnalyzeMediaOpts): Promise<Media
 /**
  * Render a proposal as the user-facing AskUser question. Layout matches
  * the spec from v3.8.31 planning: recommended first with • bullet,
- * alternatives below with ○ bullets, prices include the 5% margin note.
+ * alternatives below with ○ bullets, prices include the 5% media fee + $0.001 note.
  */
 export function renderProposalForAskUser(p: MediaProposal, userPrompt: string): {
   question: string;
@@ -387,7 +387,7 @@ export function renderProposalForAskUser(p: MediaProposal, userPrompt: string): 
     lines.push(`  ○ Premium      ${p.premium.model.padEnd(32)} ~${formatUsd(p.premium.estimatedCostUsd)}  ${p.premium.rationale}`);
   }
   lines.push('');
-  lines.push(`  (prices include the 5% gateway fee)`);
+  lines.push(`  (prices include the 5% media fee + $0.001 per call)`);
 
   const options: Array<{ id: string; label: string }> = [];
   const recLabel = p.refinedPrompt
