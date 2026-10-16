@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.1 — 2026-10-16
+
+### Changed
+- **`@blockrun/router-core` moves from d7bc10c to 0.2.0 (27125a3).** Eleven newly tool-verified models (Claude Fable 5.1 / Opus 5.5 / Sonnet 5.5, Gemini 3.8 Flash, GPT-5.1, GPT-6 Astra / Luna / Sol, Grok 4.6 / 4.7, MiMo 2.5) become availability fallbacks for tool-required turns. Primary selection is unchanged; outside Premium the cheapest fallback is tried first. Also carries router-core's V3.5 catalog-only routing, the eco free-rung retargets and the 2026-10 catalog sync.
+
 ## 0.3.0 — 2026-08-29
 
 The first sync back to upstream Franklin since the fork, plus the fee-aware
