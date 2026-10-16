@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/franklin-trading",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Franklin Trading \u2014 The AI trading agent with a wallet. Researches, backtests, paper-trades and live-trades autonomously, paying per call in USDC. Crypto-first. Apache-2.0.",
   "type": "module",
   "exports": {
@@ -38,6 +38,7 @@
   ],
   "scripts": {
     "build": "tsc && node scripts/copy-plugin-assets.mjs",
+    "prepublishOnly": "npm run build",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "npm run build && node --test --test-reporter=spec test/local.mjs test/skills.local.mjs test/api-key.local.mjs",

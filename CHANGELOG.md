@@ -3,6 +3,22 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.2 — 2026-10-16
+
+0.3.1 was published from a `dist/` built on 2026-08-29, so its code was
+0.3.0's: it carried the router-core bump below but none of the source changes
+since 0.3.0. 0.3.2 is built from the tagged source, and `npm publish` now
+rebuilds first (`prepublishOnly`) so a stale build cannot ship again.
+
+### Added
+- **BlockRun account API keys** are supported ([#13](https://github.com/BlockRunAI/Franklin-Trading/pull/13)).
+- **The nine 2026-10 gateway models are priced, sized and pinned:** GPT-6 Astra / Sol / Luna, GPT-5.1, Claude Fable 5.1 / Opus 5.5 / Sonnet 5.5 and Grok 4.6 / 4.7 (prices, context windows, vision allowlist, explicit version shortcuts). GPT-5.6 Sol / Sol Pro are priced at $4/$20.
+
+### Fixed
+- **Chat pricing is provider cost + $0.001;** the 5% markup applies to media only. Prices synced to the live catalog (2026-10-02): Sonnet 5 $2/$10, DeepSeek V4 Pro $1.32/$3.96, GPT-5.6 Terra Pro $2/$12, GPT-5.6 Luna Pro $0.2/$1.2, Gemini 3.6 Flash $0.75/$3.75.
+- **Grok rates match xAI's published list** ([#12](https://github.com/BlockRunAI/Franklin-Trading/pull/12)): Grok 4.3 $1.25/$2.50, Grok 4.5 $2.00/$6.00, Grok Build 0.1 $1.00/$2.00.
+- **The free shortcuts point at Nemotron 3 Nano Omni**, and the retired free rows are gone from the picker.
+
 ## 0.3.1 — 2026-10-16
 
 ### Changed
