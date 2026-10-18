@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.3 — 2026-10-18
+
+### Changed
+- **`@blockrun/router-core` 0.3.0** (65a92c8). Auto routing reads only the user turn for structured-output, stakes, latency and language cues, so the agent's own system prompt no longer lifts every request off the cheapest tier. CJK input is sized at about one token per character, keyword scoring matches whole words, a stale speed probe fades toward neutral instead of toward zero, and a model with no catalog price no longer reports 100% savings. Primaries for tool turns are unchanged.
+
 ## 0.3.2 — 2026-10-16
 
 0.3.1 was published from a `dist/` built on 2026-08-29, so its code was
