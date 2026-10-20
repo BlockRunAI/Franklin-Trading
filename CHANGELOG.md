@@ -3,6 +3,14 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.5 — 2026-10-20
+
+### Changed
+- **router-core 3aca0e1.** `@blockrun/router-core` moves from 2cd5a10 to 3aca0e1, which adds `google/gemini-4-argon` to the capability table (1M context, vision, `supportsTools: false` until a paid tool probe verifies it). Capability facts only: router-core's decision snapshot is byte-identical across that range, so no routing decision changes.
+
+### Fixed
+- **Mistral Large 4 at $1.36/$4.18.** The launch promo ended; the offline price and picker now use the list rate, so cost estimates no longer under-reserve by half.
+
 ## 0.3.4 — 2026-10-20
 
 ### Added
