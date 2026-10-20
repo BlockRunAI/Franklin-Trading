@@ -190,27 +190,29 @@ dead-rung kill-switch), so a retired id never strands a turn.
 
 Pin one with `/model <shortcut>` when you want to:
 
-| Tier | Shortcut | Model | Price (in / out per 1M) |
-|---|---|---|---|
-| Frontier | `opus` | Claude Opus 5 | $5 / $25 |
-| | `fable` | Claude Fable 5 | $10 / $50 |
-| | `sonnet` | Claude Sonnet 5 | $2 / $10 |
-| | `gpt` | GPT-5.6 Sol | $4 / $20 |
-| | `qwen-max` | Qwen3.7 Max | $1.475 / $4.425 |
-| | `gemini` | Gemini 3.1 Pro | $2 / $12 |
-| | `grok` | Grok 4.5 | $2 / $6 |
-| | `kimi` | Kimi K3 | $3 / $15 |
-| Reasoning | `o3` | O3 | $2 / $8 |
-| | `codex` | GPT-5.3 Codex | $1.75 / $14 |
-| | `deepseek-v4-pro` | DeepSeek V4 Pro | $1.32 / $3.96 |
-| | `terra-pro` | GPT-5.6 Terra Pro | $2 / $12 |
-| | `glm-5.3` | GLM-5.3 | $1.4 / $4.4 |
-| Budget | `haiku` | Claude Haiku 4.5 | $1 / $5 |
-| | `mini` | GPT-5 Mini | $0.25 / $2 |
-| | `glm-flash` | GLM-5.3 Flash (1M ctx, vision) | $0.15 / $0.5 |
-| | `deepseek` | DeepSeek V4 Flash | $0.14 / $0.28 |
-| | `qwen-flash` | Qwen3.7 Flash (1M ctx) | $0.03 / $0.13 |
-| Free | `omni` | Nemotron 3 Nano Omni (text + image + audio) | $0 |
+Live per-model prices: [blockrun.ai/pricing](https://blockrun.ai/pricing) (agents: `GET https://blockrun.ai/api/v1/models`). Prices are not copied here, so this page never goes stale on a reprice.
+
+| Tier | Shortcut | Model |
+| --- | --- | --- |
+| Frontier | `opus` | Claude Opus 5 |
+|  | `fable` | Claude Fable 5 |
+|  | `sonnet` | Claude Sonnet 5 |
+|  | `gpt` | GPT-5.6 Sol |
+|  | `qwen-max` | Qwen3.7 Max |
+|  | `gemini` | Gemini 3.1 Pro |
+|  | `grok` | Grok 4.5 |
+|  | `kimi` | Kimi K3 |
+| Reasoning | `o3` | O3 |
+|  | `codex` | GPT-5.3 Codex |
+|  | `deepseek-v4-pro` | DeepSeek V4 Pro |
+|  | `terra-pro` | GPT-5.6 Terra Pro |
+|  | `glm-5.3` | GLM-5.3 |
+| Budget | `haiku` | Claude Haiku 4.5 |
+|  | `mini` | GPT-5 Mini |
+|  | `glm-flash` | GLM-5.3 Flash (1M ctx, vision) |
+|  | `deepseek` | DeepSeek V4 Flash |
+|  | `qwen-flash` | Qwen3.7 Flash (1M ctx) |
+| Free | `omni` | Nemotron 3 Nano Omni (text + image + audio) |
 
 The newest gateway models are pinned by explicit version shortcut rather than
 a table row: `opus-5.5`, `sonnet-5.5`, `fable-5.1`, `gpt-6-astra`, `gpt-6-sol`,
