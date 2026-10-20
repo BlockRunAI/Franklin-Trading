@@ -84,7 +84,7 @@
   },
   "dependencies": {
     "@blockrun/llm": "^3.13.1",
-    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/65a92c85ea1f187a64e7611302ef6add236b0cba",
+    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/2cd5a1026f755cd39a3f0d6e61cab23a5ad391a9",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
