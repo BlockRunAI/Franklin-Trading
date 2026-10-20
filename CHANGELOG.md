@@ -3,10 +3,19 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.3.3 — 2026-10-18
+## 0.3.3 — 2026-10-20
+
+### Added
+- **DeepSeek V4.1 Flash.** Bare `deepseek` now names `deepseek/deepseek-v4.1-flash`, the gateway's own id for the model `deepseek-chat` serves (same upstream, $0.14/$0.28). Base and Solana both list it. `deepseek-v4.1-flash`, `deepseek-v4.1` and `v4.1-flash` pin it explicitly; the free `deepseek-v4-flash` / `dsv4` names stay free.
+- The offline price table gains the ten live ids it was missing (GPT-6.1 Sol, Gemini 3.8 Flash, DeepSeek V4 Flash Vision, Qwen 3.8 Max/Flash, Hy4 Preview, MiMo V2.5, Laguna S 2.1, Mistral Large 4, Muse Glimmer 30B), and the six vision-capable ones are flagged, so an image turn on `/model flash` is no longer swapped away.
 
 ### Changed
-- **`@blockrun/router-core` 0.3.0** (65a92c8). Auto routing reads only the user turn for structured-output, stakes, latency and language cues, so the agent's own system prompt no longer lifts every request off the cheapest tier. CJK input is sized at about one token per character, keyword scoring matches whole words, a stale speed probe fades toward neutral instead of toward zero, and a model with no catalog price no longer reports 100% savings. Primaries for tool turns are unchanged.
+- `flash` / `gemini-flash` → `google/gemini-3.8-flash`, and `glm` / `glm5` → `zai/glm-5.3`, at the same prices as before. `qwen-max` stays on 3.7 Max.
+- **Free models.** Ported Franklin's free-models module. About 15 call sites that hard-coded free ids the gateway retired (nemotron-nano-9b-v2, nemotron-nano-12b-v2-vl, mistral-nemotron, qwen3-coder-480b, llama-4-maverick) now use the live free default and chain. A free request never falls back to a paid model, and `nvidia/deepseek-v4-flash` / `-v4-pro` (both 400 at the gateway) are in no free set.
+- **`@blockrun/router-core` 2cd5a10.** Since 0.3.2 this includes 0.3.0 (65a92c8): auto routing reads only the user turn for structured-output, stakes, latency and language cues, so the agent's own system prompt no longer lifts every request off the cheapest tier. CJK input is sized at about one token per character, keyword scoring matches whole words, a stale speed probe fades toward neutral, and a model with no catalog price no longer reports 100% savings. 2cd5a10 adds capability rows for V4.1 Flash, GPT-6.1 Sol and Mistral Large 4.
+
+### Fixed
+- Retired Grok slugs are priced at the grok-4.3 rate the gateway bills ($1.25/$2.50), and `nvidia/kimi-k2.5` at $0.60/$3.00.
 
 ## 0.3.2 — 2026-10-16
 
