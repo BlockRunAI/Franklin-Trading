@@ -9553,3 +9553,11 @@ test('catalog sync 2026-10-20: every live gateway id is priced and pinnable', as
   // Free aliases never move to a paid model.
   assert.equal(resolveModel('laguna'), 'poolside/laguna-xs-2.1');
 });
+
+test('retired Grok slugs are priced at grok-4.3, which the gateway serves and bills', async () => {
+  const { MODEL_PRICING } = await import('../dist/pricing.js');
+  for (const id of ['xai/grok-3', 'xai/grok-4-0709', 'xai/grok-4-1-fast-reasoning',
+    'xai/grok-4-1-fast-non-reasoning', 'xai/grok-4-fast-non-reasoning']) {
+    assert.deepEqual(MODEL_PRICING[id], MODEL_PRICING['xai/grok-4.3'], `${id} must price as grok-4.3`);
+  }
+});
