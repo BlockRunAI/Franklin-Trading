@@ -134,6 +134,12 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   'gemini-3.5-flash-lite': 'google/gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite': 'google/gemini-3.1-flash-lite',
   'gemini-2.5-flash-lite': 'google/gemini-2.5-flash-lite',
+  // Gemini 4 Argon (live 2026-10-20, both chains) — explicit pins only. Bare
+  // `gemini` stays on 3.1 Pro until Argon has production history; moving it
+  // would change which model (and price) existing users get.
+  argon: 'google/gemini-4-argon',
+  'gemini-4': 'google/gemini-4-argon',
+  'gemini-4-argon': 'google/gemini-4-argon',
   'gemini-3': 'google/gemini-3.1-pro',
   'gemini-3.1': 'google/gemini-3.1-pro',
   // xAI — grok-4.5 is the public flagship since 2026-07-14; `grok` follows it
@@ -454,6 +460,7 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
       // superseded sibling listed directly under its successor is choice
       // paralysis, not choice. `gemini-2.5` still resolves to it.
       { id: 'google/gemini-3.1-pro',       shortcut: 'gemini',    label: 'Gemini 3.1 Pro',    price: '$2/$12' },
+      { id: 'google/gemini-4-argon',       shortcut: 'argon',     label: 'Gemini 4 Argon',    price: '$2/$10' },
       { id: 'xai/grok-4.5',                shortcut: 'grok',      label: 'Grok 4.5',          price: '$2/$6' },
       // Kimi K3 (2026-07): 2.8T open MoE, 1M context, multimodal + reasoning.
       // Replaced the budget K2.7 line — now premium-priced ($3/$15).
