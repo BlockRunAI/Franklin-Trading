@@ -6066,12 +6066,13 @@ test('picker trim: shortcuts for hidden models still resolve (muscle-memory pres
   // flagship-promotion pattern as kimi → k2.7. Explicit pins still resolve.
   assert.equal(resolveModel('grok'), 'xai/grok-4.5');
   assert.equal(resolveModel('grok-4.3'), 'xai/grok-4.3');
-  // grok-3 / grok-4-0709 / grok-4-1-fast are hidden from /v1/models but
-  // still served (probed 2026-08-29) — explicit pins resolve to the real ids.
-  assert.equal(resolveModel('grok-3'), 'xai/grok-3');
-  assert.equal(resolveModel('grok-4'), 'xai/grok-4-0709');
-  assert.equal(resolveModel('grok-fast'), 'xai/grok-4-1-fast-reasoning');
-  assert.equal(resolveModel('grok-4.1'), 'xai/grok-4-1-fast-reasoning');
+  // grok-3 / grok-4-0709 / grok-4-1-fast are retired at xAI; the gateway
+  // serves them all as grok-4.3 at grok-4.3's rate, so the pins name what
+  // answers. `grok-4` is the generation alias and follows `grok`.
+  assert.equal(resolveModel('grok-3'), 'xai/grok-4.3');
+  assert.equal(resolveModel('grok-4'), 'xai/grok-4.5');
+  assert.equal(resolveModel('grok-fast'), 'xai/grok-4.3');
+  assert.equal(resolveModel('grok-4.1'), 'xai/grok-4.3');
   assert.equal(resolveModel('grok-build'), 'xai/grok-build-0.1');
 });
 
@@ -9460,9 +9461,11 @@ test('catalog sync 2026-08-29: hidden-but-served ids stay priced, routable and p
   resetUnavailableModels();
   const served = {
     'anthropic/claude-opus-4.6': 'opus-4.6',
-    'xai/grok-4-0709': 'grok-4',
-    'xai/grok-3': 'grok-3',
-    'xai/grok-4-1-fast-reasoning': 'grok-fast',
+    // The retired xAI ids keep a price and stay routable by full id (the
+    // gateway answers them as grok-4.3); their short pins moved to grok-4.3.
+    'xai/grok-4-0709': 'xai/grok-4-0709',
+    'xai/grok-3': 'xai/grok-3',
+    'xai/grok-4-1-fast-reasoning': 'xai/grok-4-1-fast-reasoning',
     'moonshot/kimi-k2.7': 'moonshot/kimi-k2.7',
     'openai/gpt-5-nano': 'nano',
   };
@@ -9520,4 +9523,33 @@ test('2026-10 gateway models: explicit shortcuts, prices, context windows, visio
   // GPT-5.6 Sol / Sol Pro were cut to $4/$20 on 2026-08-21.
   assert.deepEqual(MODEL_PRICING['openai/gpt-5.6-sol'], { input: 4, output: 20 });
   assert.deepEqual(MODEL_PRICING['openai/gpt-5.6-sol-pro'], { input: 4, output: 20 });
+});
+
+test('catalog sync 2026-10-20: every live gateway id is priced and pinnable', async () => {
+  // Ids that reached GET /api/v1/models (Base and Solana) after the 2026-10-02
+  // sync, at the live list prices read 2026-10-20. MODEL_PRICING is what cost
+  // estimates read, and an unknown id estimates as $0.
+  const { MODEL_PRICING } = await import('../dist/pricing.js');
+  const { resolveModel } = await import('../dist/ui/model-picker.js');
+  const live = {
+    'openai/gpt-6.1-sol': [2, 10, 'gpt-6.1-sol'],
+    'google/gemini-3.8-flash': [0.75, 3.75, 'gemini-3.8-flash'],
+    'deepseek/deepseek-v4-flash-vision-exp': [0.3, 1.2, 'deepseek-vision'],
+    'qwen/qwen3.8-max': [2, 6, 'qwen3.8-max'],
+    'qwen/qwen3.8-flash': [0.15, 0.47, 'qwen3.8-flash'],
+    'tencent/hy4-preview': [0.834, 2.501, 'hy4'],
+    'xiaomi/mimo-v2.5': [0.14, 0.28, 'mimo-v2.5'],
+    'poolside/laguna-s-2.1': [0.09, 0.18, 'laguna-s'],
+    'mistral/mistral-large-4': [0.68, 2.09, 'mistral'],
+    'nvidia/muse-glimmer-30b': [0, 0, 'muse-glimmer'],
+  };
+  for (const [id, [input, output, pin]] of Object.entries(live)) {
+    assert.deepEqual(MODEL_PRICING[id], { input, output }, `${id} price drifted from the live list`);
+    assert.equal(resolveModel(pin), id, `${pin} must resolve to ${id}`);
+  }
+  // tencent/hy3 was retired 2026-09-24; the Tencent aliases follow Hy4.
+  assert.equal(resolveModel('hy3'), 'tencent/hy4-preview');
+  assert.equal(resolveModel('tencent'), 'tencent/hy4-preview');
+  // Free aliases never move to a paid model.
+  assert.equal(resolveModel('laguna'), 'poolside/laguna-xs-2.1');
 });
