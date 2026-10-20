@@ -3,6 +3,12 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.5 — 2026-10-20
+
+### Changed
+- **Mistral Large 4 at $1.36/$4.18.** Mistral's launch promotion ended and blockrun moved `mistral/mistral-large-4` off its $0.68/$2.09 promo rate; the offline price table follows.
+- **`@blockrun/router-core` 8773a99.** A live probe confirmed tool calls from `deepseek/deepseek-v4.1-flash` and `openai/gpt-6.1-sol`, so both join the verified tool fallbacks behind the configured chains. No primary changes.
+
 ## 0.3.4 — 2026-10-20
 
 ### Added
