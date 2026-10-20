@@ -5,6 +5,7 @@
 
 import { ModelClient } from '../agent/llm.js';
 import type { Dialogue } from '../agent/types.js';
+import { FREE_DEFAULT_MODEL } from '../free-models.js';
 import type { Entity, BrainExtraction, EntityType } from './types.js';
 import {
   loadEntities, saveEntities, upsertEntity,
@@ -14,12 +15,13 @@ import {
 // Last entry is the free safety net. nvidia/nemotron-super-49b held it until
 // 2026-08-20, by which point it had left the catalog entirely — the free pool
 // answers for it with a substitute, so the "free fallback" was neither the
-// model named nor reliably shaped. nemotron-nano-9b-v2 is the current free
-// default and verifiably serves itself.
+// model named nor reliably shaped. The free rung follows FREE_DEFAULT_MODEL
+// (src/free-models.ts) — nemotron-nano-9b-v2 held it until it, too, left the
+// catalog in the 2026-08-30 pool rotation.
 const EXTRACTION_MODELS = [
   'google/gemini-2.5-flash-lite',
   'google/gemini-2.5-flash',
-  'nvidia/nemotron-nano-9b-v2',
+  FREE_DEFAULT_MODEL,
 ];
 
 const VALID_TYPES = new Set<EntityType>(['person', 'project', 'company', 'product', 'concept']);

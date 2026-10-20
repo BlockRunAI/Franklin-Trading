@@ -33,6 +33,7 @@ import {
   type RoutingProfile,
 } from '../router/index.js';
 import { classifyAgentError } from '../agent/error-classifier.js';
+import { freeVisionModel, isFreeModelId } from '../free-models.js';
 import { estimateCost } from '../pricing.js';
 import { getMaxOutputTokens } from '../agent/optimize.js';
 import { VERSION } from '../config.js';
@@ -352,7 +353,7 @@ export function createProxy(options: ProxyOptions): http.Server {
             // Model override logic:
             // - Native Anthropic-format IDs (e.g. "claude-sonnet-4-6-20250514")
             //   don't contain "/" — these MUST be replaced with currentModel.
-            // - BlockRun model IDs always contain "/" (e.g. "blockrun/auto", "nvidia/mistral-nemotron")
+            // - BlockRun model IDs always contain "/" (e.g. "blockrun/auto", "anthropic/claude-sonnet-5")
             //   — these should be passed through as-is.
             // - If --model CLI flag is set, always override regardless.
             if (options.modelOverride) {
@@ -449,12 +450,21 @@ export function createProxy(options: ProxyOptions): http.Server {
               // sending the image would tokenize as base64 text and produce
               // a hallucinated answer. Same swap policy as the agent loop's
               // interactive path so behavior is consistent across surfaces.
+              //
+              // Exception: a FREE model is never swapped for a paid one. There
+              // is no free vision model (router/vision.ts), so the sibling
+              // lookup returns the paid default — swapping would start
+              // charging a user who explicitly chose the free tier.
               const original = requestModel;
-              const visionSwap = pickVisionSibling(original);
+              const visionSwap = isFreeModelId(original)
+                ? (freeVisionModel() ?? original)
+                : pickVisionSibling(original);
               parsed.model = visionSwap;
               requestModel = visionSwap;
               logger.warn(
-                `[franklin] 👁️  Vision swap: ${original} can't see images → ${visionSwap}`
+                visionSwap === original
+                  ? `[franklin] 👁️  ${original} can't see images and no free vision model is available — answering from text only`
+                  : `[franklin] 👁️  Vision swap: ${original} can't see images → ${visionSwap}`
               );
             }
 

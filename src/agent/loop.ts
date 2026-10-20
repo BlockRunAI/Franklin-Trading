@@ -30,6 +30,7 @@ import { estimateCost, OPUS_PRICING } from '../pricing.js';
 import { maybeMidSessionExtract } from '../learnings/extractor.js';
 import { extractMentions, buildEntityContext, loadEntities } from '../brain/store.js';
 import { routeRequest, parseRoutingProfile, getFallbackChain, pickFreeFallback, isVisionModel, messageNeedsVision, pickVisionSibling, markModelUnavailable } from '../router/index.js';
+import { freeVisionModel, isFreeModelId } from '../free-models.js';
 import type { Tier, RoutingProfile, RoutingResult } from '../router/index.js';
 import { recordOutcome } from '../router/local-elo.js';
 import { shouldPlan, getPlanningPrompt, getExecutorModel, isExecutorStuck, toolCallSignature } from './planner.js';
@@ -531,10 +532,10 @@ function formatModelSwitch(
  */
 export function isWeakModel(model: string): boolean {
   const m = model.toLowerCase();
-  // NVIDIA-hosted open models have been observed confabulating tool calls.
-  // `blockrun/free` resolves to an NVIDIA model before the API call, so
-  // catching the `nvidia/` prefix also catches the free-profile path.
-  if (m.startsWith('nvidia/')) return true;
+  // Free-tier open models have been observed confabulating tool calls.
+  // isFreeModelId covers the non-NVIDIA free ids (poolside, cohere) too;
+  // the prefix check keeps paid NVIDIA-hosted SKUs nagged as before.
+  if (isFreeModelId(model) || m.startsWith('nvidia/')) return true;
   if (m.includes('nemotron-ultra')) return true;
   if (m.includes('qwen3-coder')) return true;
   // GLM-4* is weak; GLM-5+ is capable enough to skip the nag.
@@ -1321,11 +1322,27 @@ export async function interactiveSession(
         lastRoutedModel = routing.model;
         lastRoutedCategory = routing.category || '';
         if (loopCount === 1) {
-          const visionTag = turnNeedsVision ? ' 👁️' : '';
+          // A free-profile vision turn is routed to a TEXT model on purpose:
+          // the gateway has no free model that honours an image (see
+          // router/vision.ts). Say so instead of showing the 👁️ tag over a
+          // model that will answer from the text stub alone — and never fall
+          // back to a paid model, which the free profile must not do.
+          const visionUnavailable = routing.signals.includes('free-vision-unavailable');
+          const visionTag = turnNeedsVision && !visionUnavailable ? ' 👁️' : '';
           onEvent({
             kind: 'text_delta',
             text: `*Auto → ${routing.model}${visionTag}*\n\n`,
           });
+          if (visionUnavailable) {
+            onEvent({
+              kind: 'text_delta',
+              text:
+                '*⚠️ No free vision model is available — the free vision ids drop the ' +
+                'image on about half of all calls and answer anyway. This turn answers ' +
+                'from text only, so treat anything said about the image as a guess. ' +
+                'Switch to a paid model (e.g. `/model haiku`) to send it.*\n\n',
+            });
+          }
         }
       } else if (turnNeedsVision && !isVisionModel(resolvedModel)) {
         // ── Manual-mode guard ──
@@ -1337,13 +1354,39 @@ export async function interactiveSession(
         // overridden). Always emit a visible notice so the user knows their
         // pick was overridden and why.
         const original = resolvedModel;
-        const visionSwap = pickVisionSibling(original);
-        resolvedModel = visionSwap;
-        config.model = visionSwap;
-        onEvent({
-          kind: 'text_delta',
-          text: `*⚠️ ${original} can't see images — using ${visionSwap} for this turn.*\n\n`,
-        });
+        // A free-tier model must NEVER be swapped for a paid one. There is no
+        // free vision model (router/vision.ts), so pickVisionSibling would
+        // return the paid default and start charging a user who explicitly
+        // chose the free tier — silently, mid-turn. Say so and stay free.
+        if (isFreeModelId(original)) {
+          const freeVision = freeVisionModel();
+          if (freeVision) {
+            resolvedModel = freeVision;
+            config.model = freeVision;
+            onEvent({
+              kind: 'text_delta',
+              text: `*⚠️ ${original} can't see images — using ${freeVision} for this turn (still free).*\n\n`,
+            });
+          } else {
+            onEvent({
+              kind: 'text_delta',
+              text:
+                `*⚠️ ${original} can't see images, and no free vision model ` +
+                'is reliable right now — the free vision ids drop the image on ' +
+                'about half of all calls and answer anyway. Answering from ' +
+                'text only, so treat anything said about the image as a guess; ' +
+                'switch to a paid model (e.g. `/model haiku`) to send it.*\n\n',
+            });
+          }
+        } else {
+          const visionSwap = pickVisionSibling(original);
+          resolvedModel = visionSwap;
+          config.model = visionSwap;
+          onEvent({
+            kind: 'text_delta',
+            text: `*⚠️ ${original} can't see images — using ${visionSwap} for this turn.*\n\n`,
+          });
+        }
       }
 
       // Update token estimation model for more accurate byte-per-token ratio
@@ -1461,7 +1504,9 @@ export async function interactiveSession(
         const hasTools = responseParts.some(p => p.type === 'tool_use');
         const hasThinking = responseParts.some(p => p.type === 'thinking');
         if (!hasText && !hasTools && !hasThinking) {
-          const EMPTY_FALLBACK_MODELS = ['nvidia/qwen3-coder-480b', 'nvidia/llama-4-maverick', 'zai/glm-5.1'];
+          // The live free chain (src/free-models.ts). The literals that used to
+          // sit here (qwen3-coder-480b, llama-4-maverick) left the catalog.
+          const EMPTY_FALLBACK_MODELS = getFallbackChain('SIMPLE', 'free');
           const nextModel = EMPTY_FALLBACK_MODELS.find(m => m !== config.model && !turnFailedModels.has(m));
           if (nextModel && recoveryAttempts < 2) {
             recoveryAttempts++;

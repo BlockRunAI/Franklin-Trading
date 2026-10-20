@@ -6,15 +6,11 @@
 import readline from 'node:readline';
 import chalk from 'chalk';
 import { getGatewayModels, type GatewayModel } from '../gateway-models.js';
+import { FREE_DEFAULT_MODEL } from '../free-models.js';
 
-/**
- * The free model every free alias resolves to — the same id Franklin's
- * FREE_DEFAULT_MODEL names. Nemotron 3 Nano Omni is the free id that stayed
- * on BOTH the Base and Solana gateways through every free-pool rotation, so a
- * bare `free` does not 400 on either chain. nemotron-nano-9b-v2 / nemotron-nano-12b-v2-vl / mistral-nemotron,
- * which held this slot before, are gone from /v1/models.
- */
-export const FREE_DEFAULT_MODEL = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning';
+// The free model every free alias resolves to now lives in src/free-models.ts
+// (one constant, imported everywhere). Re-exported for existing importers.
+export { FREE_DEFAULT_MODEL };
 
 // ─── Model Shortcuts (same as proxy) ───────────────────────────────────────
 

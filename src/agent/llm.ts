@@ -28,6 +28,7 @@ import type {
 } from './types.js';
 import { ThinkTagStripper } from './think-tag-stripper.js';
 import { isNemotronProseModel, stripNemotronProse } from './nemotron-prose-stripper.js';
+import { FREE_DEFAULT_MODEL } from '../free-models.js';
 
 // Reasoning-tier models the gateway routes to that reject `tool_choice`
 // outright. Pattern: OpenAI o1/o3 family + DeepSeek's reasoner variant.
@@ -465,14 +466,14 @@ export class ModelClient {
 
     // Static fallback when the router module isn't loadable. Defaults to a
     // FREE model so users aren't silently charged. The unknown-key path also
-    // falls through to qwen, so legacy `blockrun/eco` / `blockrun/premium`
+    // falls through to the free default, so legacy `blockrun/eco` / `blockrun/premium`
     // strings (now retired routing profiles) end up at the same place
     // without needing dedicated entries.
     const FALLBACKS: Record<string, string> = {
-      'blockrun/auto': 'nvidia/qwen3-coder-480b',
-      'blockrun/free': 'nvidia/qwen3-coder-480b',
+      'blockrun/auto': FREE_DEFAULT_MODEL,
+      'blockrun/free': FREE_DEFAULT_MODEL,
     };
-    return FALLBACKS[model] || 'nvidia/qwen3-coder-480b';
+    return FALLBACKS[model] || FREE_DEFAULT_MODEL;
   }
 
   /**

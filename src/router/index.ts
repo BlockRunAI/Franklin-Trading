@@ -26,6 +26,12 @@ import { selectModel } from './selector.js';
 import type { LearnedWeights } from './selector.js';
 import { computeLocalElo, blendElo } from './local-elo.js';
 import { isVisionModel, pickVisionSibling } from './vision.js';
+import {
+  FREE_DEFAULT_MODEL,
+  QUARANTINED_FREE_MODELS,
+  freeChain,
+  freeVisionModel,
+} from '../free-models.js';
 
 export { isVisionModel, messageNeedsVision, messagesNeedVision, pickVisionSibling } from './vision.js';
 
@@ -121,7 +127,7 @@ const SHARED_MODEL_PRICING = new Map(
 //      route to, because the free pool answers for them with a substitute
 //      (the response's `model` field names a different model) and leaks
 //      thinking prose into content. Same "never promise a model the user
-//      doesn't get" rule the picker applies; see FREE_MODELS_BY_CATEGORY.
+//      doesn't get" rule the picker applies; see src/free-models.ts.
 //   3. Runtime observations — markModelUnavailable() is called by the agent
 //      loop when the gateway rejects a routed model id (400 "Unknown model",
 //      404, 410 — see AgentErrorInfo.modelUnavailable). Process-scoped: the
@@ -137,10 +143,13 @@ const KNOWN_UNAVAILABLE_MODELS: readonly string[] = [
 ];
 
 const QUARANTINED_MODELS: readonly string[] = [
-  // Catalogued free id; live probe 2026-08-29 answered as
-  // nvidia/nemotron-3-super-120b with the reasoning trace duplicated into
-  // `content`. The core uses it as the free backstop rung of every Auto
-  // chain — Franklin's chains end one rung earlier instead.
+  // Catalogued free ids Franklin refuses to route to. The list and the per-id
+  // evidence live in src/free-models.ts so the picker, the router and the
+  // chains all quarantine the same set.
+  ...QUARANTINED_FREE_MODELS,
+  // Substituted out of the catalog entirely on 2026-08-30 (a 2026-08-29 probe
+  // answered as nemotron-3-super-120b with the reasoning trace in `content`);
+  // the core still used it as the free backstop rung of every Auto chain.
   'nvidia/step-3.7-flash',
 ];
 
@@ -536,8 +545,14 @@ function classicRouteRequest(
 // nemotron-3-nano-omni is the replacement: live-probed on this exact prompt
 // shape it returns "MEDIUM" and nothing else, and it verifiably serves itself
 // rather than riding a pooled substitute.
-const CLASSIFIER_MODEL = process.env.FRANKLIN_ROUTER_MODEL || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning';
-const CLASSIFIER_TIMEOUT_MS = 2_500;
+//
+// 2026-08-30 (ported from Franklin): re-probed at max_tokens 8, every free id
+// now reasons out loud before answering, so the verdict never arrived inside
+// the budget. The classifier now follows FREE_DEFAULT_MODEL, gets a budget
+// the verdict can arrive in, and reads the LAST tier word on the last line.
+const CLASSIFIER_MODEL = process.env.FRANKLIN_ROUTER_MODEL || FREE_DEFAULT_MODEL;
+const CLASSIFIER_TIMEOUT_MS = 8_000;
+const CLASSIFIER_MAX_TOKENS = 1_024;
 
 const CLASSIFIER_SYSTEM = `You classify a user's message into ONE routing tier for a CLI agent. Reply with EXACTLY ONE WORD from the allowed set. No explanation, no punctuation, no quotes.
 
@@ -558,8 +573,29 @@ export type TierClassifier = (prompt: string) => Promise<Tier | null>;
  * the caller can fall back to keyword classification.
  */
 function parseTierWord(reply: string): Tier | null {
-  const m = reply.trim().toUpperCase().match(/\b(SIMPLE|MEDIUM|COMPLEX|REASONING)\b/);
-  return m ? (m[1] as Tier) : null;
+  const text = reply.trim().toUpperCase();
+  if (!text) return null;
+  const TIER = /\b(SIMPLE|MEDIUM|COMPLEX|REASONING)\b/g;
+
+  // Preferred: the reply is (or ends on) a bare tier word. A model that
+  // followed the instruction lands here.
+  const lastLine = text.split(/\n+/).filter(Boolean).pop() ?? '';
+  const bare = lastLine.match(/^[^A-Z]*\b(SIMPLE|MEDIUM|COMPLEX|REASONING)\b[^A-Z]*$/);
+  if (bare) return bare[1] as Tier;
+
+  // Otherwise take the last tier word ON THE LAST LINE, not on the whole blob.
+  // Whole-blob last-match was wrong in a way that costs money: CLASSIFIER_SYSTEM
+  // itself ends "SIMPLE or MEDIUM or COMPLEX or REASONING", so any reply that
+  // restates its instructions — the documented failure this parser exists to
+  // survive — matched REASONING, the most expensive tier. The classified text
+  // is also untrusted user content, so a prompt ending in the word REASONING
+  // could push its own tier up. Failing toward the cheap end is the safe
+  // direction; returning null (keyword routing) is safer still.
+  const onLastLine = lastLine.match(TIER);
+  if (onLastLine && onLastLine.length > 0) {
+    return onLastLine[onLastLine.length - 1] as Tier;
+  }
+  return null;
 }
 
 /**
@@ -597,7 +633,7 @@ export async function llmClassifyRequest(prompt: string): Promise<Tier | null> {
         system: CLASSIFIER_SYSTEM,
         messages: [{ role: 'user', content: prompt.slice(0, 2000) }],
         tools: [],
-        max_tokens: 8,
+        max_tokens: CLASSIFIER_MAX_TOKENS,
       },
       ctrl.signal,
     );
@@ -676,15 +712,21 @@ export function resolveTierToModel(
   needsVision = false,
 ): RoutingResult {
   // Free profile short-circuits — everything routes to a single free model.
-  // Vision turns go to nemotron-nano-12b-v2-vl: the one vision-capable free
-  // model that verifiably serves itself (the 30B omni line is pooled onto a
-  // text-only substitute upstream, verified live 2026-08-12).
+  //
+  // Vision turns go to the chain's free vision model when it has one. Where
+  // it doesn't, they get the TEXT model plus a `free-vision-unavailable`
+  // signal that callers surface — the free profile never falls back to a paid
+  // model. See freeVisionModel() for the per-chain measurements.
+  // (nemotron-nano-12b-v2-vl, the old free vision id, left the catalog.)
   if (profile === 'free') {
+    const freeVision = needsVision ? freeVisionModel() : null;
     return {
-      model: needsVision ? 'nvidia/nemotron-nano-12b-v2-vl' : 'nvidia/nemotron-nano-9b-v2',
+      model: freeVision ?? liveFreeChain()[0] ?? FREE_DEFAULT_MODEL,
       tier: 'SIMPLE',
       confidence: 1.0,
-      signals: needsVision ? ['free-profile', 'free-vision'] : ['free-profile'],
+      signals: needsVision
+        ? ['free-profile', freeVision ? 'free-vision' : 'free-vision-unavailable']
+        : ['free-profile'],
       savings: 1.0,
     };
   }
@@ -717,16 +759,19 @@ export function routeRequest(
 ): RoutingResult {
   const normalizedContext = normalizeRoutingContext(context);
 
-  // Free profile — always use free model (vision turns get the free VL model;
-  // see resolveTierToModel for the rationale).
+  // Free profile — always use a free model. Vision turns go to the chain's
+  // free vision model where one exists (see resolveTierToModel).
   if (profile === 'free') {
+    const freeVision = normalizedContext.needsVision ? freeVisionModel() : null;
     return {
-      model: normalizedContext.needsVision ? 'nvidia/nemotron-nano-12b-v2-vl' : 'nvidia/nemotron-nano-9b-v2',
+      model: freeVision ?? liveFreeChain()[0] ?? FREE_DEFAULT_MODEL,
       tier: 'SIMPLE',
       confidence: 1.0,
-      signals: normalizedContext.needsVision ? ['free-profile', 'free-vision'] : ['free-profile'],
+      signals: normalizedContext.needsVision
+        ? ['free-profile', freeVision ? 'free-vision' : 'free-vision-unavailable']
+        : ['free-profile'],
       savings: 1.0,
-      candidates: FREE_MODELS_BY_CATEGORY.chat,
+      candidates: freeModelsForCategory(),
     };
   }
 
@@ -874,7 +919,7 @@ export function getFallbackChain(
   tier: Tier,
   profile: RoutingProfile = 'auto'
 ): string[] {
-  if (profile === 'free') return FREE_MODELS_BY_CATEGORY.chat;
+  if (profile === 'free') return freeModelsForCategory();
   const config = AUTO_TIERS[tier];
   return [config.primary, ...config.fallback];
 }
@@ -885,58 +930,49 @@ export function getFallbackChain(
 // mid-turn (402 payment, rate-limit) and we need a zero-cost replacement
 // to keep the user moving without waiting for funding.
 //
-// The lists are ordered: best-fit free model first, then degraded fallbacks.
-// llama-4-maverick leads every category — it's the only reliably-healthy free
-// model and covers chat / coding / reasoning. deepseek-v4-flash (1M ctx) is the
-// secondary; it occasionally times out on the NVIDIA NIM upstream, so it sits
-// behind maverick rather than leading.
-// 2026-06-07: nvidia/glm-4.7 dropped from every chain — NVIDIA NIM hung, the
-// gateway redirected it to a now-dead model, so routing to it just wasted a slot.
-// 2026-07-11: nvidia/deepseek-v4-flash removed — the gateway no longer serves
-// it (410). Free tier is now led by nvidia/qwen3-next-80b-a3b-instruct (cleanest
-// free instruction-follower — no thinking leak / markdown fences, verified live).
-// 2026-07-14: nvidia/llama-4-maverick replaced by nvidia/mistral-nemotron as the
-// different-family fallback. Maverick left the gateway catalog, and the free
-// pool silently substitutes for it — a live probe showed both maverick and
-// qwen3-next answering as `nvidia/nemotron-3-super-120b-a12b-free`. Two chain
-// entries backed by the same pooled model is fake resilience: the fallback
-// couldn't rescue a turn the primary had already failed. mistral-nemotron
-// verifiably serves itself, so the chain is genuinely two families again.
-// 2026-08-12: nvidia/qwen3-next-80b-a3b-instruct removed — NVIDIA EOL'd it
-// (410 on 2026-07-27; the gateway hid it and rides its calls on a fallback).
-// nemotron-nano-9b-v2 promoted to lead: it is the only free text model that
-// verifiably serves ITSELF on the streaming path Franklin uses (verified live
-// through the binary today). mistral-nemotron is DEGRADED at NVIDIA — stream
-// calls 400 ("DEGRADED function cannot be invoked") and non-stream calls ride
-// the gateway's disclosed fallback.
-// 2026-08-19: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning promoted to
-// second. When it was last probed it came back served as gpt-oss-120b — the
-// pooled-substitute trap this comment warns about — but NVIDIA has since
-// fixed it: it now answers as ITSELF on both the streaming and non-streaming
-// paths, and it returns clean single-word output under tight max_tokens (it
-// is also the router's classifier for that reason). mistral-nemotron drops to
-// third: still DEGRADED at NVIDIA, kept as a genuinely different family for
-// the case where both Nemotron nano builds are down. The catalog's fifth free
-// id, step-3.7-flash, stays out of every chain — it leaks thinking prose into
-// content AND comes back served by nemotron-3-super-120b (re-probed
-// 2026-08-29, unchanged). It is also QUARANTINED for the shared Router above,
-// which would otherwise use it as the free backstop rung of every Auto chain.
-const OMNI = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning';
+// The ids, the ordering and the evidence behind both live in
+// src/free-models.ts — this file only maps categories onto that chain. The
+// chain is deliberately short and identical across categories: the 2026-08-30
+// probe established that the free pool collapses every NVIDIA id onto one
+// backing model under load, so per-category NVIDIA rungs were three names for
+// the same upstream — fake resilience that could never rescue a turn the
+// first rung had already failed. The one real axis of resilience left is
+// provider, which is why the last rung is poolside rather than NVIDIA.
+//
+// Rotation history (kept short on purpose — the per-id post-mortems moved to
+// free-models.ts): glm-4.7 dropped 2026-06-07, deepseek-v4-flash 2026-07-11,
+// llama-4-maverick 2026-07-14, qwen3-next 2026-08-12, and on 2026-08-30 the
+// gateway rotated the entire pool at once.
 
-const FREE_MODELS_BY_CATEGORY: Record<Category, string[]> = {
-  coding:    ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
-  trading:   ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
-  research:  ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
-  reasoning: ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
-  chat:      ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
-  creative:  ['nvidia/nemotron-nano-9b-v2', OMNI, 'nvidia/mistral-nemotron'],
-};
+// Every category shares one chain. The ids, the ordering and the evidence
+// live in src/free-models.ts; freeChain() filters them against the live
+// catalog for the CURRENT chain, because the Solana gateway lists only one of
+// them and 400s on the rest. It is a function, not a constant, for that
+// reason — a frozen array captured at module load would pin whichever answer
+// was true before the catalog cache warmed.
+function freeModelsForCategory(): string[] {
+  return liveFreeChain();
+}
 
-const DEFAULT_FREE_CHAIN: string[] = [
-  'nvidia/nemotron-nano-9b-v2',
-  OMNI,
-  'nvidia/mistral-nemotron',
-];
+/**
+ * freeChain() filtered by the runtime kill-switch.
+ *
+ * freeChain lives in free-models.ts, which cannot import this module (the
+ * dependency runs the other way), so it knows nothing about the ids
+ * markModelUnavailable() has observed the gateway REJECT with 400 / 404 / 410.
+ * Without this filter a dead free rung was re-selected on every turn — the
+ * per-turn `alreadyFailed` set is cleared at the top of each turn, so the
+ * kill-switch had no effect on the free profile at all. Given this branch
+ * exists because the free pool rotates ids without notice, that is the exact
+ * failure mode it has to survive.
+ */
+function liveFreeChain(alreadyFailed: ReadonlySet<string> = new Set()): string[] {
+  const live = freeChain(alreadyFailed).filter(m => !isModelUnavailable(m));
+  // Every rung observed dead: fall back to the unfiltered chain rather than
+  // refusing to route. A stale kill-switch entry must not strand a free user
+  // with no model at all.
+  return live.length > 0 ? live : freeChain(alreadyFailed);
+}
 
 /**
  * Pick the next free model to try given the question category and which
@@ -944,12 +980,15 @@ const DEFAULT_FREE_CHAIN: string[] = [
  * candidate has been exhausted (caller should surface an error to user).
  */
 export function pickFreeFallback(
+  /** @deprecated Ignored — the free chain no longer varies by category. */
   category: string,
   alreadyFailed: Set<string>
 ): string | undefined {
-  const chain = (FREE_MODELS_BY_CATEGORY as Record<string, string[]>)[category]
-    ?? DEFAULT_FREE_CHAIN;
-  return chain.find(m => !alreadyFailed.has(m));
+  // Category is accepted for API compatibility; the chain no longer varies by
+  // it (see freeModelsForCategory). Marked deprecated so a new caller doesn't
+  // assume passing one changes the answer.
+  void category;
+  return liveFreeChain(alreadyFailed)[0];
 }
 
 /**

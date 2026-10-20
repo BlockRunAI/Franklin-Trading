@@ -10,7 +10,7 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; perC
   'blockrun/auto': { input: 0.8, output: 4.0 },
   'blockrun/free': { input: 0, output: 0 },
   // FREE — BlockRun gateway free tier. The `free` shortcut resolves to
-  // nemotron-3-nano-omni (FREE_DEFAULT_MODEL in ui/model-picker.ts). The
+  // nemotron-3-nano-omni (FREE_DEFAULT_MODEL in src/free-models.ts). The
   // nano-9b-v2, mistral-nemotron, nano-12b-v2-vl and step-3.7-flash rows are
   // no longer in /api/v1/models; they stay at 0 for legacy session records.
   'nvidia/nemotron-nano-9b-v2': { input: 0, output: 0 },
