@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.4 — 2026-10-20
+
+### Added
+- **Gemini 4 Argon.** `google/gemini-4-argon`, Google's frontier reasoning model, is live on Base and Solana at $2/$10 per 1M (Google's rate through 2026-11-30; $4/$20 from 2026-12-01). Priced offline, sized at its 1M window, flagged vision-capable, listed in the picker, and pinnable as `argon`, `gemini-4` or `gemini-4-argon`. Nothing routes to it by default: bare `gemini` stays on 3.1 Pro and the router is unchanged.
+
 ## 0.3.3 — 2026-10-20
 
 ### Added
