@@ -3,6 +3,7 @@
  */
 
 import { ModelClient } from '../agent/llm.js';
+import { FREE_DEFAULT_MODEL, isFreeModelId } from '../free-models.js';
 import { assembleInstructions } from '../agent/context.js';
 import type {
   CapabilityHandler,
@@ -26,10 +27,10 @@ interface SubAgentInput {
   model?: string;
 }
 
-// Heuristic: which model IDs are free?
-function isFreeModel(m: string): boolean {
-  return m.startsWith('nvidia/') || m === 'blockrun/free' || m === '';
-}
+// Which model IDs are billed at $0? See src/free-models.ts — the old
+// `startsWith('nvidia/')` heuristic mis-classified paid nvidia SKUs as free
+// and the poolside/cohere free ids as paid.
+const isFreeModel = isFreeModelId;
 
 async function execute(input: Record<string, unknown>, ctx: ExecutionScope): Promise<CapabilityResult> {
   const { prompt, description, model } = input as unknown as SubAgentInput;
@@ -39,7 +40,7 @@ async function execute(input: Record<string, unknown>, ctx: ExecutionScope): Pro
   }
 
   // Resolve which model the sub-agent will actually run on
-  const subModel = model || registeredParentModel || 'nvidia/nemotron-nano-9b-v2';
+  const subModel = model || registeredParentModel || FREE_DEFAULT_MODEL;
 
   // Cost gate: if parent is free but sub-agent wants paid, ask user first.
   // Prevents silent charges when the agent decides to spawn a more capable sub-agent.

@@ -21,6 +21,7 @@ import {
   maxDurationSeconds,
   type GatewayModel,
 } from '../gateway-models.js';
+import { FREE_DEFAULT_MODEL } from '../free-models.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -60,9 +61,16 @@ export interface MediaProposal {
 
 // ─── Classifier ─────────────────────────────────────────────────────────
 
-const CLASSIFIER_MODEL = process.env.FRANKLIN_MEDIA_ROUTER_MODEL || 'nvidia/llama-4-maverick';
-const TIMEOUT_MS = 3_500; // slightly more lenient than the turn-analyzer — we're asking for JSON with reasoning
-const MAX_TOKENS = 384; // bumped from 256 to leave room for refined_prompt (≤500 chars) + refinement_summary (≤80)
+// llama-4-maverick held this slot until it left the gateway catalog
+// (2026-07-14); the free pool answered for it with a substitute. Follows
+// FREE_DEFAULT_MODEL now. That is a reasoning model, so the budget has to
+// cover its thinking AND the JSON (refined_prompt ≤500 chars +
+// refinement_summary ≤80) — the 384-token / 3.5s budget sized for maverick
+// would truncate it mid-thought (see the TRUNCATION note in
+// src/free-models.ts) and the parse would fail silently.
+const CLASSIFIER_MODEL = process.env.FRANKLIN_MEDIA_ROUTER_MODEL || FREE_DEFAULT_MODEL;
+const TIMEOUT_MS = 10_000;
+const MAX_TOKENS = 2_048;
 const REFINED_MAX_CHARS = 500;
 const REFINEMENT_SUMMARY_MAX_CHARS = 80;
 

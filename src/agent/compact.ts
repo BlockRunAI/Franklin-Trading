@@ -13,6 +13,7 @@ import {
   getCompactionThreshold,
   COMPACTION_SUMMARY_RESERVE,
 } from './tokens.js';
+import { FREE_DEFAULT_MODEL, isFreeModelId } from '../free-models.js';
 
 /** Max files to restore after compaction */
 const POST_COMPACT_MAX_FILES = 5;
@@ -538,13 +539,13 @@ function formatCompactSummary(raw: string): string {
 
 /**
  * Pick a cheaper/faster model for compaction to save cost.
- * If the primary model is free (NVIDIA), compaction also stays free
+ * If the primary model is free (isFreeModelId), compaction also stays free
  * so users don't get silent charges when their context fills up.
  */
 function pickCompactionModel(primaryModel: string): string {
   // Free parent → free compaction (no silent charge)
-  if (primaryModel.startsWith('nvidia/') || primaryModel === 'blockrun/free') {
-    return 'nvidia/nemotron-nano-9b-v2';
+  if (isFreeModelId(primaryModel)) {
+    return FREE_DEFAULT_MODEL;
   }
   // Use cheapest capable model for summarization to save cost
   // Tier down: opus/pro → sonnet, sonnet → haiku, everything else → flash (cheapest capable)
