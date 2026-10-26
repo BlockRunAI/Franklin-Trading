@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/franklin-trading",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Franklin Trading — The AI trading agent with a wallet. Researches, backtests, paper-trades and live-trades autonomously, paying per call in USDC. Crypto-first. Apache-2.0.",
   "type": "module",
   "exports": {
@@ -84,7 +84,7 @@
   },
   "dependencies": {
     "@blockrun/llm": "^3.13.1",
-    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/8773a9954b091bd0090acdfec67c75a006c0e156",
+    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/fd6d03d035ff676642ba1683c333d929939f8a00",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",

@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.6 — 2026-10-26
+
+### Changed
+- **`@blockrun/router-core` fd6d03d.** Bump @blockrun/router-core to fd6d03d: adds the shared parseModelCatalog / toRoutingCatalog catalog API. No routing behavior change.
+
 ## 0.3.5 — 2026-10-20
 
 ### Changed
