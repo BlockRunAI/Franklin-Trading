@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.7 — 2026-11-08
+
+### Fixed
+- **`@blockrun/router-core` 273c2af (router audit).** Auto routing now makes the same decisions as @blockrun/llm 3.26.4 and blockrun-llm 1.21.6: Chinese debug/refactor/extraction/proof prompts are no longer classified as plain chat, a bare language name on a tool turn no longer goes to the code-agent pool, tool-name verbs and reservation ids no longer match look-alike text, an unpriced model no longer wins on cost, NaN prices or malformed performance data can no longer leak into the ranking, and the capability snapshot is synced to the 2026-11-08 catalog.
+
 ## 0.3.6 — 2026-10-26
 
 ### Changed
