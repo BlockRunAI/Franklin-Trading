@@ -267,9 +267,9 @@ test('proxy server handles OPTIONS and local model switching without backend cal
     });
     assert.equal(switchRes.status, 200, `Expected switch response 200, got ${switchRes.status}`);
     const payload = await switchRes.json();
-    assert.equal(payload.model, 'anthropic/claude-sonnet-5');
+    assert.equal(payload.model, 'anthropic/claude-sonnet-5.5');
     assert.ok(
-      payload.content?.[0]?.text?.includes('Switched to **anthropic/claude-sonnet-5**'),
+      payload.content?.[0]?.text?.includes('Switched to **anthropic/claude-sonnet-5.5**'),
       `Unexpected switch payload: ${JSON.stringify(payload)}`
     );
 
@@ -6053,7 +6053,9 @@ test('picker trim: hidden entries are gone from the visible list', async () => {
 
 test('picker trim: shortcuts for hidden models still resolve (muscle-memory preserved)', async () => {
   const { resolveModel } = await import('../dist/ui/model-picker.js');
-  assert.equal(resolveModel('claude'), 'anthropic/claude-opus-5');
+  assert.equal(resolveModel('claude'), 'anthropic/claude-opus-5.5');
+  // Opus 5 is an explicit pin since `opus` / `claude` moved to Opus 5.5.
+  assert.equal(resolveModel('opus-5'), 'anthropic/claude-opus-5');
   // Opus 4.8 left the visible picker when Opus 5 superseded it at the same
   // price — the explicit pin must keep resolving.
   assert.equal(resolveModel('opus-4.8'), 'anthropic/claude-opus-4.8');
@@ -6087,8 +6089,9 @@ test('picker trim: shortcuts for hidden models still resolve (muscle-memory pres
 test('picker trim: hero shortcuts (opus, sonnet, gpt, gemini-3, grok) still in visible list', async () => {
   const { PICKER_CATEGORIES } = await import('../dist/ui/model-picker.js');
   const ids = PICKER_CATEGORIES.flatMap((c) => c.models.map((m) => m.id));
-  assert.ok(ids.includes('anthropic/claude-opus-5'));
-  assert.ok(ids.includes('anthropic/claude-sonnet-5'));
+  // Opus 5.5 / Sonnet 5.5 took the `opus` / `sonnet` rows 2026-11-27.
+  assert.ok(ids.includes('anthropic/claude-opus-5.5'));
+  assert.ok(ids.includes('anthropic/claude-sonnet-5.5'));
   assert.ok(ids.includes('openai/gpt-5.6-sol'));
   assert.ok(ids.includes('google/gemini-3.1-pro'));
   // Gemini 2.5 Pro lost its row in the 2026-08-19 sync (superseded sibling
@@ -9561,10 +9564,11 @@ test('2026-10 gateway models: explicit shortcuts, prices, context windows, visio
     assert.equal(getContextWindow(id), ctx, `${id} context window`);
     assert.equal(isVisionModel(id), true, `${id} is vision-capable`);
   }
-  // Bare aliases are not retargeted by this change — except `grok`, which
-  // moved to grok-4.7 in the 2026-11-27 generation refresh (same $2/$6).
-  assert.equal(resolveModel('opus'), 'anthropic/claude-opus-5');
-  assert.equal(resolveModel('sonnet'), 'anthropic/claude-sonnet-5');
+  // Bare aliases were not retargeted by the 2026-10 additions. The 2026-11-27
+  // generation refresh moved `opus` / `sonnet` to Opus 5.5 / Sonnet 5.5 and
+  // `grok` to grok-4.7 (each the same price or cheaper).
+  assert.equal(resolveModel('opus'), 'anthropic/claude-opus-5.5');
+  assert.equal(resolveModel('sonnet'), 'anthropic/claude-sonnet-5.5');
   assert.equal(resolveModel('fable'), 'anthropic/claude-fable-5');
   assert.equal(resolveModel('gpt'), 'openai/gpt-5.6-sol');
   assert.equal(resolveModel('grok'), 'xai/grok-4.7');

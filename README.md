@@ -194,9 +194,9 @@ Live per-model prices: [blockrun.ai/pricing](https://blockrun.ai/pricing) (agent
 
 | Tier | Shortcut | Model |
 | --- | --- | --- |
-| Frontier | `opus` | Claude Opus 5 |
+| Frontier | `opus` | Claude Opus 5.5 |
 |  | `fable` | Claude Fable 5 |
-|  | `sonnet` | Claude Sonnet 5 |
+|  | `sonnet` | Claude Sonnet 5.5 |
 |  | `gpt` | GPT-5.6 Sol |
 |  | `qwen-max` | Qwen3.7 Max |
 |  | `gemini` | Gemini 3.1 Pro |

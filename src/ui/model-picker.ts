@@ -25,17 +25,21 @@ export const MODEL_SHORTCUTS: Record<string, string> = {
   eco: 'blockrun/auto',
   premium: 'blockrun/auto',
   // Anthropic — `claude` follows Opus; `fable` is the Mythos-class tier above it.
+  // The generic `opus` / `claude` / `sonnet` aliases follow the newest model
+  // in each line — Opus 5.5 ($4/$20) and Sonnet 5.5 ($2/$10) since
+  // 2026-11-27, matching ClawRouter and the shared model-catalog policy.
+  // `fable` stays on Fable 5 (Fable 5.2 is Base-only). Explicit pins below
+  // (`opus-5`, `sonnet-5`, `opus-4.8`, ...) keep naming the model you type.
   fable: 'anthropic/claude-fable-5',
   'fable-5': 'anthropic/claude-fable-5',
-  sonnet: 'anthropic/claude-sonnet-5',
-  claude: 'anthropic/claude-opus-5',
+  sonnet: 'anthropic/claude-sonnet-5.5',
+  claude: 'anthropic/claude-opus-5.5',
   'sonnet-5': 'anthropic/claude-sonnet-5',
   'sonnet-4.6': 'anthropic/claude-sonnet-4.6',
   'sonnet-4.5': 'anthropic/claude-sonnet-4.5',
-  opus: 'anthropic/claude-opus-5',
+  opus: 'anthropic/claude-opus-5.5',
   'opus-5': 'anthropic/claude-opus-5',
-  // 2026-10 additions — explicit version pins only. The bare `opus` /
-  // `sonnet` / `fable` / `claude` aliases above are deliberately NOT moved.
+  // 2026-10 additions — explicit version pins.
   'opus-5.5': 'anthropic/claude-opus-5.5',
   'sonnet-5.5': 'anthropic/claude-sonnet-5.5',
   'fable-5.1': 'anthropic/claude-fable-5.1',
@@ -458,11 +462,13 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
     category: '✨ Premium frontier',
     models: [
       { id: 'anthropic/claude-fable-5',    shortcut: 'fable',     label: 'Claude Fable 5',    price: '$10/$50' },
-      // Opus 5 supersedes 4.8 at the same $5/$25 — 4.8 drops out of the visible
-      // list (its `opus-4.8` shortcut stays live) rather than sitting next to a
-      // strictly-better entry at an identical price.
-      { id: 'anthropic/claude-opus-5',     shortcut: 'opus',      label: 'Claude Opus 5',     price: '$5/$25', highlight: true },
-      { id: 'anthropic/claude-sonnet-5',   shortcut: 'sonnet',    label: 'Claude Sonnet 5',   price: '$2/$10' },
+      // Opus 5.5 ($4/$20) and Sonnet 5.5 ($2/$10) took the Opus 5 / Sonnet 5
+      // rows 2026-11-27, when the bare `opus` / `sonnet` aliases moved to them.
+      // The superseded rows drop out of the visible list rather than sitting
+      // next to a strictly-better entry; their `opus-5` / `sonnet-5` /
+      // `opus-4.8` shortcuts stay live.
+      { id: 'anthropic/claude-opus-5.5',   shortcut: 'opus',      label: 'Claude Opus 5.5',   price: '$4/$20', highlight: true },
+      { id: 'anthropic/claude-sonnet-5.5', shortcut: 'sonnet',    label: 'Claude Sonnet 5.5', price: '$2/$10' },
       { id: 'qwen/qwen3.7-max',            shortcut: 'qwen-max',  label: 'Qwen3.7 Max',       price: '$1.475/$4.425', highlight: true },
       { id: 'openai/gpt-5.6-sol',          shortcut: 'gpt',       label: 'GPT-5.6 Sol',       price: '$4/$20', highlight: true },
       // Gemini 2.5 Pro's row retired here the same way Opus 4.8's did: a
