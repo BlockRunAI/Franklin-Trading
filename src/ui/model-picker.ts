@@ -475,7 +475,7 @@ export const PICKER_CATEGORIES: ModelCategory[] = [
       // superseded sibling listed directly under its successor is choice
       // paralysis, not choice. `gemini-2.5` still resolves to it.
       { id: 'google/gemini-3.1-pro',       shortcut: 'gemini',    label: 'Gemini 3.1 Pro',    price: '$2/$12' },
-      { id: 'google/gemini-4-argon',       shortcut: 'argon',     label: 'Gemini 4 Argon',    price: '$2/$10' },
+      { id: 'google/gemini-4-argon',       shortcut: 'argon',     label: 'Gemini 4 Argon',    price: '$4/$20' },
       // Grok 4.7 took 4.5's row 2026-11-27 (same $2/$6); `grok-4.5` still resolves.
       { id: 'xai/grok-4.7',                shortcut: 'grok',      label: 'Grok 4.7',          price: '$2/$6' },
       // Kimi K3 (2026-07): 2.8T open MoE, 1M context, multimodal + reasoning.

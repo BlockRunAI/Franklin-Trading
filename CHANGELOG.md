@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.11 — 2026-12-01
+
+### Changed
+- **Gemini 4 Argon and Carbon cost $4/$20 per 1M.** Google's introductory $2/$10 rate for both ended on 2026-11-30, and the gateways bill $4/$20 (cached input $0.20) from 2026-12-01. The price table and the `/model` picker's Argon row follow. `google/gemini-4-carbon` gets a price row; it had none, so its spend was estimated at $0.
+
 ## 0.3.9 — 2026-11-27
 
 ### Changed

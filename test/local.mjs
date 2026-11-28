@@ -9586,7 +9586,8 @@ test('catalog sync 2026-10-20: every live gateway id is priced and pinnable', as
   const live = {
     'openai/gpt-6.1-sol': [2, 10, 'gpt-6.1-sol'],
     'google/gemini-3.8-flash': [0.75, 3.75, 'gemini-3.8-flash'],
-    'google/gemini-4-argon': [2, 10, 'gemini-4-argon'],
+    // Google's $2/$10 intro rate ended 2026-11-30; $4/$20 from 2026-12-01.
+    'google/gemini-4-argon': [4, 20, 'gemini-4-argon'],
     'deepseek/deepseek-v4-flash-vision-exp': [0.3, 1.2, 'deepseek-vision'],
     'qwen/qwen3.8-max': [2, 6, 'qwen3.8-max'],
     'qwen/qwen3.8-flash': [0.15, 0.47, 'qwen3.8-flash'],
@@ -9605,6 +9606,15 @@ test('catalog sync 2026-10-20: every live gateway id is priced and pinnable', as
   assert.equal(resolveModel('tencent'), 'tencent/hy4-preview');
   // Free aliases never move to a paid model.
   assert.equal(resolveModel('laguna'), 'poolside/laguna-xs-2.1');
+});
+
+test('2026-12-01: Gemini 4 Argon and Carbon are priced at $4/$20, Google\'s rate after the intro ended', async () => {
+  // Both ran at Google's $2/$10 intro rate through 2026-11-30. Carbon was
+  // missing from the table, so it estimated at the unknown-id $0.
+  const { MODEL_PRICING } = await import('../dist/pricing.js');
+  for (const id of ['google/gemini-4-argon', 'google/gemini-4-carbon']) {
+    assert.deepEqual(MODEL_PRICING[id], { input: 4, output: 20 }, id);
+  }
 });
 
 test('retired Grok slugs are priced at grok-4.3, which the gateway serves and bills', async () => {
