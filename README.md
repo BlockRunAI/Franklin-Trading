@@ -200,15 +200,15 @@ Live per-model prices: [blockrun.ai/pricing](https://blockrun.ai/pricing) (agent
 |  | `gpt` | GPT-5.6 Sol |
 |  | `qwen-max` | Qwen3.7 Max |
 |  | `gemini` | Gemini 3.1 Pro |
-|  | `grok` | Grok 4.5 |
+|  | `grok` | Grok 4.7 |
 |  | `kimi` | Kimi K3 |
-| Reasoning | `o3` | O3 |
+| Reasoning | `o3` | GPT-5.4 Mini (o3's successor) |
 |  | `codex` | GPT-5.3 Codex |
 |  | `deepseek-v4-pro` | DeepSeek V4 Pro |
 |  | `terra-pro` | GPT-5.6 Terra Pro |
 |  | `glm-5.3` | GLM-5.3 |
 | Budget | `haiku` | Claude Haiku 4.5 |
-|  | `mini` | GPT-5 Mini |
+|  | `mini` | GPT-5.6 Luna |
 |  | `glm-flash` | GLM-5.3 Flash (1M ctx, vision) |
 |  | `deepseek` | DeepSeek V4 Flash |
 |  | `qwen-flash` | Qwen3.7 Flash (1M ctx) |
@@ -216,8 +216,10 @@ Live per-model prices: [blockrun.ai/pricing](https://blockrun.ai/pricing) (agent
 
 The newest gateway models are pinned by explicit version shortcut rather than
 a table row: `opus-5.5`, `sonnet-5.5`, `fable-5.1`, `gpt-6-astra`, `gpt-6-sol`,
-`gpt-6-luna`, `gpt-5.1`, `grok-4.7` and `grok-4.6` (or any full id, e.g.
-`/model anthropic/claude-opus-5.5`). Live prices: [blockrun.ai/pricing](https://blockrun.ai/pricing).
+`gpt-6.2-sol`, `gpt-6-luna`, `gpt-5.1`, `grok-4.7` and `grok-4.6` (or any full
+id, e.g. `/model anthropic/claude-opus-5.5`). Version pins for older models
+(`sonnet-4.6`, `opus-4.8`, `gpt-5.4`, `grok-4.5`) still resolve to the model
+you name. Live prices: [blockrun.ai/pricing](https://blockrun.ai/pricing).
 
 The full catalog — <!-- br:models.totalVisible -->125<!-- /br:models.totalVisible --> visible models including image, video, music and speech — is at
 [blockrun.ai/models](https://blockrun.ai/models). Chat is provider cost with no markup, plus

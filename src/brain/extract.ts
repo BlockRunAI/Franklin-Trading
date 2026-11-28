@@ -20,7 +20,7 @@ import {
 // catalog in the 2026-08-30 pool rotation.
 const EXTRACTION_MODELS = [
   'google/gemini-2.5-flash-lite',
-  'google/gemini-2.5-flash',
+  'google/gemini-3.5-flash-lite', // 2.5 Flash's successor (2.5 Flash retires 2026-12-01)
   FREE_DEFAULT_MODEL,
 ];
 

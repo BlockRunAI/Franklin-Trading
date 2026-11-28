@@ -25,7 +25,7 @@ const REFERENCE_MODELS = [
   // 2026-08-30 pool rotation and were answered by a substitute. freeChain()
   // also keeps the two voices on different PROVIDERS where the catalog allows.
   ...freeChain().slice(0, 2),
-  'google/gemini-2.5-flash',                // Fast, cheap
+  'google/gemini-3.5-flash-lite',           // Fast, cheap (2.5 Flash's successor)
   'deepseek/deepseek-chat',                 // Cheap, good reasoning
 ];
 
@@ -193,7 +193,7 @@ Sends the prompt to 4 diverse models, then aggregates with a strong model.
 Parameters:
 - prompt (required): The question or task to send to all models
 - models (optional): Array of model IDs to use as references (default: 4 diverse free/cheap models)
-- aggregator (optional): Model to aggregate responses (default: claude-sonnet-4.6)
+- aggregator (optional): Model to aggregate responses (default: the free model; pass e.g. sonnet to upgrade)
 - include_reasoning (optional): If true, include reference responses in output`,
     input_schema: {
       type: 'object',
