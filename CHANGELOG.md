@@ -3,6 +3,11 @@
 All notable changes to Franklin Trading. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.10 — 2026-11-27
+
+### Changed
+- **`@blockrun/router-core` 92f77ec (funded re-probe).** A re-probe on a funded wallet confirmed tool calls from Mistral Large 4, Qwen 3.8 Max, Qwen 3.8 Flash, HY4 Preview and GPT-6.1 Terra, so they are now tool-verified in the capability snapshot. Poolside Laguna S 2.1 failed after payment twice and is marked unavailable, so it fails closed. The snapshot covers 93 text models. No routing decision changes: none of the newly verified models sits in a chain or in the verified tool fallbacks, so they serve a tool-required turn only when you pin them.
+
 ## 0.3.9 — 2026-11-27
 
 ### Changed
