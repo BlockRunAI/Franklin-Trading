@@ -54,7 +54,7 @@ program
   .description('Start the franklin agent')
   .option(
     '-m, --model <model>',
-    'Model to use (e.g. openai/gpt-5.5, anthropic/claude-sonnet-4.6). Default from config or claude-sonnet-4.6'
+    'Model to use (e.g. openai/gpt-6.2-sol, anthropic/claude-sonnet-5.5). Default from config or blockrun/auto'
   )
   .option('--debug', 'Enable debug logging')
   .option('--trust', 'Trust mode — skip permission prompts for all tools')

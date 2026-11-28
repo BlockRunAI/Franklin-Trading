@@ -1551,7 +1551,7 @@ export async function interactiveSession(
               'anthropic/claude-haiku-4.5',
               'moonshot/kimi-k2.6',
               'openai/gpt-5',
-              'anthropic/claude-sonnet-4.6',
+              'anthropic/claude-sonnet-5.5',
             ];
             const nextModel = TOOL_USE_FALLBACK_MODELS.find(
               m => m !== config.model && !turnFailedModels.has(m),
@@ -1833,7 +1833,7 @@ export async function interactiveSession(
         // were the way out.
         let suggestion = classified.suggestion ? `\nTip: ${classified.suggestion}` : '';
         if (classified.category === 'rate_limit' && turnFailedModels.size > 0) {
-          suggestion = `\nTip: All free models tried this turn are rate-limited. Switch to a paid model with /model anthropic/claude-sonnet-4.6 (or any other paid model) and retry — your wallet handles it. Or wait ~60s and /retry the same turn.`;
+          suggestion = `\nTip: All free models tried this turn are rate-limited. Switch to a paid model with /model anthropic/claude-sonnet-5.5 (or any other paid model) and retry — your wallet handles it. Or wait ~60s and /retry the same turn.`;
         }
         onEvent({
           kind: 'turn_done',
